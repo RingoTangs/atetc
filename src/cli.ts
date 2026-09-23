@@ -5,6 +5,7 @@ import path from 'node:path'
 import process from 'node:process'
 import chalk from 'chalk'
 import { Command } from 'commander'
+import { expandOperationShortcut } from './cli-arguments'
 import { comparePaks } from './compare'
 import {
   ENTRY_SIZE,
@@ -144,6 +145,10 @@ const program = new Command()
   .description('Inspect, unpack, verify, and rebuild etc.pak archives')
   .version('0.1.0')
   .showSuggestionAfterError()
+  .addHelpText(
+    'after',
+    `\nOperation shortcuts:\n  -c <directory> [options]  same as pack\n  -x <pak> [options]        same as unpack`,
+  )
 
 program
   .command('info')
@@ -256,7 +261,6 @@ program
 
 program
   .command('unpack')
-  .alias('x')
   .description('extract archive files into a directory')
   .argument('<pak>')
   .option('-o, --output <directory>')
@@ -298,7 +302,6 @@ program
 
 program
   .command('pack')
-  .alias('c')
   .description('build an archive from a directory')
   .argument('<directory>')
   .option('-o, --output <pak>')
@@ -479,9 +482,11 @@ program
     if (!result.logicalMatch) process.exitCode = 1
   })
 
-program.parseAsync(process.argv).catch((error: unknown) => {
-  console.error(
-    `${chalk.red.bold('Error:')} ${failure(error instanceof Error ? error.message : String(error))}`,
-  )
-  process.exitCode = 1
-})
+program
+  .parseAsync(expandOperationShortcut(process.argv))
+  .catch((error: unknown) => {
+    console.error(
+      `${chalk.red.bold('Error:')} ${failure(error instanceof Error ? error.message : String(error))}`,
+    )
+    process.exitCode = 1
+  })
