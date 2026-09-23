@@ -23,16 +23,18 @@ atetc test-roundtrip etc.pak
 atetc compare etc.pak rebuilt.pak
 ```
 
-交互使用时可以使用常用简写：
+交互使用时可以使用操作简写和常用别名：
 
 ```bash
 atetc ls etc.pak -l
-atetc x etc.pak -o output
-atetc c output -r etc.pak -o rebuilt.pak
+atetc -x etc.pak -o output
+atetc -c output -r etc.pak -o rebuilt.pak
 atetc check rebuilt.pak
 atetc rt rebuilt.pak
 atetc cmp etc.pak rebuilt.pak
 ```
+
+`-c` 和 `-x` 必须是 `atetc` 后的第一个参数，分别用于选择 `pack` 和 `unpack` 操作；不支持 `-cf`、`-xf` 等组合形式。
 
 `unpack` 只输出归档内的实际文件。`pack` 会递归扫描输入目录，并复现游戏使用的大小写不敏感文件名顺序，其中下划线排在字母之后。使用 `--reference` 可以从原始 PAK 保留匹配条目的顺序和元数据；未修改文件还会复用原压缩流，使未修改归档能够逐字节重建。除非明确传入 `--force`，否则不会覆盖已有 PAK。
 
