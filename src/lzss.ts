@@ -156,7 +156,7 @@ export function compressLzss(input: Buffer): Buffer {
   while (bufferedLength < LZSS_MAX_MATCH && inputPosition < input.length)
     dictionary[dictionaryPosition + bufferedLength++] = input[inputPosition++]!
 
-  for (let index = 1; index <= LZSS_MAX_MATCH; index++)
+  for (let index = 1; index < LZSS_MAX_MATCH; index++)
     insertNode(dictionaryPosition - index)
   insertNode(dictionaryPosition)
 
