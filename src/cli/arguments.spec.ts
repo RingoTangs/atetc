@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { expandOperationShortcut } from './cli-arguments'
+import { expandOperationShortcut } from './arguments'
 
 describe('expandOperationShortcut', () => {
   it('expands the create shortcut in command position', () => {
