@@ -23,7 +23,9 @@ atetc test-roundtrip etc.pak
 atetc compare etc.pak rebuilt.pak
 ```
 
-`unpack` 只输出归档内的实际文件。`pack` 会递归扫描输入目录，并复现游戏使用的大小写不敏感文件名顺序，其中下划线排在字母之后。使用 `--reference` 可以从原始 PAK 保留匹配条目的顺序和未知字段。除非明确传入 `--force`，否则不会覆盖已有 PAK。
+`unpack` 只输出归档内的实际文件。`pack` 会递归扫描输入目录，并复现游戏使用的大小写不敏感文件名顺序，其中下划线排在字母之后。使用 `--reference` 可以从原始 PAK 保留匹配条目的顺序和元数据；未修改文件还会复用原压缩流，使未修改归档能够逐字节重建。除非明确传入 `--force`，否则不会覆盖已有 PAK。
+
+新增或修改的文件使用最接近原游戏工具的经典 Okumura 二叉树 LZSS 编码器。
 
 ## 库 API
 
