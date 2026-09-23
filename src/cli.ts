@@ -143,9 +143,11 @@ const program = new Command()
   .name('atetc')
   .description('Inspect, unpack, verify, and rebuild etc.pak archives')
   .version('0.1.0')
+  .showSuggestionAfterError()
 
 program
   .command('info')
+  .description('show archive metadata and compression statistics')
   .argument('<pak>')
   .action((filename: string) => {
     const archive = parsePak(readPak(filename))
@@ -174,6 +176,8 @@ program
 
 program
   .command('list')
+  .alias('ls')
+  .description('list files in archive order')
   .argument('<pak>')
   .option('-l, --long', 'show sizes and compression ratio')
   .action((filename: string, options: { long?: boolean }) => {
@@ -191,6 +195,7 @@ program
 
 program
   .command('inspect')
+  .description('inspect binary layout and unknown fields')
   .argument('<pak>')
   .action((filename: string) => {
     const archive = parsePak(readPak(filename))
@@ -242,6 +247,8 @@ program
 
 program
   .command('verify')
+  .alias('check')
+  .description('validate archive structure and compressed streams')
   .argument('<pak>')
   .action((filename: string) => {
     if (!printIssues(readPak(filename))) process.exitCode = 1
@@ -249,6 +256,8 @@ program
 
 program
   .command('unpack')
+  .alias('x')
+  .description('extract archive files into a directory')
   .argument('<pak>')
   .option('-o, --output <directory>')
   .action((filename: string, options: { output?: string }) => {
@@ -289,6 +298,8 @@ program
 
 program
   .command('pack')
+  .alias('c')
+  .description('build an archive from a directory')
   .argument('<directory>')
   .option('-o, --output <pak>')
   .option(
@@ -411,6 +422,8 @@ program
 
 program
   .command('test-roundtrip')
+  .alias('rt')
+  .description('rebuild in memory and compare all unpacked files')
   .argument('<pak>')
   .action((filename: string) => {
     const originalBuffer = readPak(filename)
@@ -444,6 +457,8 @@ program
 
 program
   .command('compare')
+  .alias('cmp')
+  .description('compare logical contents and binary representation')
   .argument('<original>')
   .argument('<generated>')
   .action((original: string, generated: string) => {
