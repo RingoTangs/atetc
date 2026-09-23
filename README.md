@@ -23,6 +23,17 @@ atetc test-roundtrip etc.pak
 atetc compare etc.pak rebuilt.pak
 ```
 
+Common aliases are available for interactive use:
+
+```bash
+atetc ls etc.pak -l
+atetc x etc.pak -o output
+atetc c output -r etc.pak -o rebuilt.pak
+atetc check rebuilt.pak
+atetc rt rebuilt.pak
+atetc cmp etc.pak rebuilt.pak
+```
+
 `unpack` writes only the files stored in the archive. `pack` recursively scans its input directory and reproduces the game's case-insensitive filename order, where underscores sort after letters. Pass `--reference` to preserve matching entry order and metadata; unchanged files also reuse their original compressed streams, allowing an unchanged archive to be rebuilt byte-for-byte. Existing PAK output is never overwritten unless `--force` is supplied.
 
 New and modified files use the classic Okumura binary-tree LZSS encoder that most closely matches the original game tool.
