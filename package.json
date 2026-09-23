@@ -7,13 +7,13 @@
   "description": "A TypeScript npm library template powered by tsdown.",
   "author": "RingoTangs",
   "license": "MIT",
-  "homepage": "https://github.com/RingoTangs/tsdown-template#readme",
+  "homepage": "https://github.com/RingoTangs/atetc#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/RingoTangs/tsdown-template.git"
+    "url": "git+https://github.com/RingoTangs/atetc.git"
   },
   "bugs": {
-    "url": "https://github.com/RingoTangs/tsdown-template/issues"
+    "url": "https://github.com/RingoTangs/atetc/issues"
   },
   "keywords": [
     "typescript",
