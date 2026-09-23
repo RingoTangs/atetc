@@ -22,6 +22,10 @@ export interface PakHeader {
 // field10 的真实语义仍未确认，因此 reference 重建时继续保留其原值。
 export interface PakEntry {
   index: number
+  entryOffset: number
+  type: 'file' | 'directory'
+  path: string
+  depth: number
   field00: number
   dataOffset: number
   packedSize: number
@@ -31,16 +35,21 @@ export interface PakEntry {
   nameRaw: Buffer
   raw: Buffer
   packedData: Buffer
+  children?: PakEntry[]
 }
 export interface PakArchive {
   header: PakHeader
   entries: PakEntry[]
+  files: PakEntry[]
+  directories: PakEntry[]
+  entryCount: number
   dataStart: number
   size: number
 }
 export interface PakBuildEntry {
   name: string
-  data: Buffer
+  data?: Buffer
+  children?: readonly PakBuildEntry[]
   field00?: number
   field10?: number
   packedData?: Buffer
@@ -63,6 +72,19 @@ export interface PakVerificationResult {
   valid: boolean
   archive?: PakArchive
   issues: VerificationIssue[]
+}
+
+/** 按归档的深度优先顺序展开目录树。 */
+export function flattenPakEntries(entries: readonly PakEntry[]): PakEntry[] {
+  const flattened: PakEntry[] = []
+  const visit = (items: readonly PakEntry[]): void => {
+    for (const entry of items) {
+      flattened.push(entry)
+      if (entry.children) visit(entry.children)
+    }
+  }
+  visit(entries)
+  return flattened
 }
 
 function checkedEnd(
@@ -152,39 +174,121 @@ export function parsePak(buffer: Buffer): PakArchive {
     field0c: buffer.readUInt32LE(12),
     raw: Buffer.from(buffer.subarray(0, HEADER_SIZE)),
   }
-  const entries: PakEntry[] = []
-  for (let index = 0; index < indexSize / ENTRY_SIZE; index++) {
-    // dataOffset 是相对于整个 PAK 文件的绝对偏移，而不是相对数据区的偏移。
-    const offset = HEADER_SIZE + index * ENTRY_SIZE
-    const raw = Buffer.from(buffer.subarray(offset, offset + ENTRY_SIZE))
-    const dataOffset = raw.readUInt32LE(4)
-    const packedSize = raw.readUInt32LE(8)
-    const unpackedSize = raw.readUInt32LE(12)
-    const dataEnd = checkedEnd(
-      dataOffset,
-      packedSize,
+  const indexRanges: Array<{ start: number; end: number }> = [
+    { start: HEADER_SIZE, end: dataStart },
+  ]
+  let decodedIndex = 0
+  const parseBlock = (
+    blockOffset: number,
+    blockSize: number,
+    parentPath: string,
+    depth: number,
+  ): PakEntry[] => {
+    if (depth > 256) throw new Error('Directory nesting exceeds 256 levels')
+    const blockEnd = checkedEnd(
+      blockOffset,
+      blockSize,
       buffer.length,
-      `Entry #${index} data`,
+      `Directory index at ${blockOffset}`,
     )
-    if (dataOffset < dataStart)
+    if (blockSize % ENTRY_SIZE !== 0)
+      throw new Error(`Invalid directory index size: ${blockSize}`)
+    if (blockSize > 0 && blockOffset < dataStart && blockOffset !== HEADER_SIZE)
       throw new Error(
-        `Entry #${index} has an invalid data offset: ${dataOffset}`,
+        `Directory index at ${blockOffset} overlaps the header index`,
       )
-    const decoded = decodeFilename(raw.subarray(FILENAME_OFFSET), index)
-    entries.push({
-      index,
-      field00: raw.readUInt32LE(0),
-      dataOffset,
-      packedSize,
-      unpackedSize,
-      field10: raw.readUInt32LE(16),
-      name: decoded.name,
-      nameRaw: decoded.raw,
-      raw,
-      packedData: Buffer.from(buffer.subarray(dataOffset, dataEnd)),
-    })
+    if (blockOffset !== HEADER_SIZE && blockSize > 0) {
+      if (
+        indexRanges.some(
+          (range) => blockOffset < range.end && blockEnd > range.start,
+        )
+      )
+        throw new Error(
+          `Directory index at ${blockOffset} overlaps another index`,
+        )
+      indexRanges.push({ start: blockOffset, end: blockEnd })
+    }
+
+    const entries: PakEntry[] = []
+    for (
+      let localIndex = 0;
+      localIndex < blockSize / ENTRY_SIZE;
+      localIndex++
+    ) {
+      const entryOffset = blockOffset + localIndex * ENTRY_SIZE
+      const raw = Buffer.from(
+        buffer.subarray(entryOffset, entryOffset + ENTRY_SIZE),
+      )
+      const field00 = raw.readUInt32LE(0)
+      const dataOffset = raw.readUInt32LE(4)
+      const packedSize = raw.readUInt32LE(8)
+      const unpackedSize = raw.readUInt32LE(12)
+      const currentIndex = decodedIndex++
+      const dataEnd = checkedEnd(
+        dataOffset,
+        packedSize,
+        buffer.length,
+        `Entry #${currentIndex} data`,
+      )
+      if (dataOffset < dataStart)
+        throw new Error(
+          `Entry #${currentIndex} has an invalid data offset: ${dataOffset}`,
+        )
+      const decoded = decodeFilename(
+        raw.subarray(FILENAME_OFFSET),
+        currentIndex,
+      )
+      const entryPath = parentPath
+        ? `${parentPath}/${decoded.name}`
+        : decoded.name
+      const entry: PakEntry = {
+        index: currentIndex,
+        entryOffset,
+        type: field00 === 1 ? 'directory' : 'file',
+        path: entryPath,
+        depth,
+        field00,
+        dataOffset,
+        packedSize,
+        unpackedSize,
+        field10: raw.readUInt32LE(16),
+        name: decoded.name,
+        nameRaw: decoded.raw,
+        raw,
+        packedData: Buffer.from(buffer.subarray(dataOffset, dataEnd)),
+      }
+      if (field00 === 1) {
+        if (packedSize !== unpackedSize || packedSize % ENTRY_SIZE !== 0)
+          throw new Error(
+            `Directory entry #${currentIndex} has an invalid index size`,
+          )
+        entry.children = parseBlock(
+          dataOffset,
+          packedSize,
+          entryPath,
+          depth + 1,
+        )
+      }
+      entries.push(entry)
+    }
+    return entries
   }
-  return { header, entries, dataStart, size: buffer.length }
+
+  const entries = parseBlock(HEADER_SIZE, indexSize, '', 0)
+  const flattened = flattenPakEntries(entries)
+  // 解析子表后重新按实际深度优先顺序编号，供 list、错误信息和 compare 使用。
+  flattened.forEach((entry, index) => (entry.index = index))
+  const files = flattened.filter((entry) => entry.type === 'file')
+  const directories = flattened.filter((entry) => entry.type === 'directory')
+  return {
+    header,
+    entries,
+    files,
+    directories,
+    entryCount: flattened.length,
+    dataStart,
+    size: buffer.length,
+  }
 }
 
 /** 验证结构、文件名、数据区间以及每个 LZSS 流能否完整解压。 */
@@ -203,34 +307,33 @@ export function verifyPak(buffer: Buffer): PakVerificationResult {
   const issues: VerificationIssue[] = []
   const names = new Set<string>()
   const intervals: Array<{ start: number; end: number; entry: PakEntry }> = []
-  for (const entry of archive.entries) {
+  for (const entry of flattenPakEntries(archive.entries)) {
     const context = {
       entryIndex: entry.index,
-      filename: entry.name,
+      filename: entry.path,
       offset: entry.dataOffset,
       packedSize: entry.packedSize,
       unpackedSize: entry.unpackedSize,
     }
-    if (names.has(entry.name))
+    if (names.has(entry.path))
       issues.push({ ...context, error: 'Duplicate filename' })
-    names.add(entry.name)
-    if (entry.field00 !== 0) {
+    names.add(entry.path)
+    if (entry.field00 !== 0 && entry.field00 !== 1) {
       issues.push({
         ...context,
-        error:
-          entry.field00 === 1
-            ? 'Directory entries are not supported'
-            : `Unsupported entry type: ${entry.field00}`,
+        error: `Unsupported entry type: ${entry.field00}`,
       })
       continue
     }
-    try {
-      decompressLzss(entry.packedData, entry.unpackedSize)
-    } catch (error) {
-      issues.push({
-        ...context,
-        error: error instanceof Error ? error.message : String(error),
-      })
+    if (entry.type === 'file') {
+      try {
+        decompressLzss(entry.packedData, entry.unpackedSize)
+      } catch (error) {
+        issues.push({
+          ...context,
+          error: error instanceof Error ? error.message : String(error),
+        })
+      }
     }
     intervals.push({
       start: entry.dataOffset,
@@ -266,62 +369,118 @@ function writeUint32(
 
 /** 根据文件内容构建 PAK；未提供的未知字段按已确认样本值 0 写入。 */
 export function buildPak(input: PakBuildInput): Buffer {
-  const indexSize = input.entries.length * ENTRY_SIZE
-  const compressed = input.entries.map((entry, index) => {
-    if (!entry.packedData) return compressLzss(entry.data)
-    let unpacked: Buffer
-    try {
-      unpacked = decompressLzss(entry.packedData, entry.data.length)
-    } catch (error) {
-      throw new Error(
-        `Entry #${index} has invalid precompressed data: ${error instanceof Error ? error.message : String(error)}`,
-      )
+  interface PreparedEntry {
+    source: PakBuildEntry
+    type: 'file' | 'directory'
+    compressed?: Buffer
+    children?: PreparedEntry[]
+  }
+
+  let preparedIndex = 0
+  const prepare = (entry: PakBuildEntry): PreparedEntry => {
+    const index = preparedIndex++
+    const isDirectory = entry.children !== undefined
+    if (isDirectory) {
+      if (entry.data !== undefined || entry.packedData !== undefined)
+        throw new Error(`Directory entry #${index} must not contain file data`)
+      if (entry.field00 !== undefined && entry.field00 !== 1)
+        throw new Error(`Directory entry #${index} must use field00=1`)
+      return {
+        source: entry,
+        type: 'directory',
+        children: entry.children!.map(prepare),
+      }
     }
-    if (!unpacked.equals(entry.data))
-      throw new Error(
-        `Entry #${index} precompressed data does not match its contents`,
-      )
-    return Buffer.from(entry.packedData)
-  })
-  const totalSize =
-    HEADER_SIZE +
-    indexSize +
-    compressed.reduce((sum, item) => sum + item.length, 0)
+    if (!entry.data) throw new Error(`File entry #${index} is missing data`)
+    if (entry.field00 !== undefined && entry.field00 !== 0)
+      throw new Error(`File entry #${index} must use field00=0`)
+    let compressed: Buffer
+    if (!entry.packedData) compressed = compressLzss(entry.data)
+    else {
+      let unpacked: Buffer
+      try {
+        unpacked = decompressLzss(entry.packedData, entry.data.length)
+      } catch (error) {
+        throw new Error(
+          `Entry #${index} has invalid precompressed data: ${error instanceof Error ? error.message : String(error)}`,
+        )
+      }
+      if (!unpacked.equals(entry.data))
+        throw new Error(
+          `Entry #${index} precompressed data does not match its contents`,
+        )
+      compressed = Buffer.from(entry.packedData)
+    }
+    return { source: entry, type: 'file', compressed }
+  }
+
+  const prepared = input.entries.map(prepare)
+  const indexSize = prepared.length * ENTRY_SIZE
+  const serializedSize = (entries: readonly PreparedEntry[]): number =>
+    entries.length * ENTRY_SIZE +
+    entries.reduce(
+      (sum, entry) =>
+        sum +
+        (entry.type === 'directory'
+          ? serializedSize(entry.children!)
+          : entry.compressed!.length),
+      0,
+    )
+  const totalSize = HEADER_SIZE + serializedSize(prepared)
   if (totalSize > 0xffffffff) throw new Error('PAK exceeds uint32 size limits')
   const output = Buffer.alloc(totalSize)
   writeUint32(output, PAK_MAGIC, 0, 'magic')
   writeUint32(output, indexSize, 4, 'indexSize')
   writeUint32(output, input.field08 ?? 0, 8, 'field08')
   writeUint32(output, input.field0c ?? 0, 12, 'field0c')
-  let dataOffset = HEADER_SIZE + indexSize
-  input.entries.forEach((entry, index) => {
-    const raw = Buffer.alloc(ENTRY_SIZE)
-    const encodedName = encodeFilename(entry.name)
-    writeUint32(raw, entry.field00 ?? 0, 0, `Entry #${index} field00`)
-    writeUint32(raw, dataOffset, 4, `Entry #${index} dataOffset`)
-    writeUint32(raw, compressed[index]!.length, 8, `Entry #${index} packedSize`)
-    writeUint32(raw, entry.data.length, 12, `Entry #${index} unpackedSize`)
-    writeUint32(raw, entry.field10 ?? 0, 16, `Entry #${index} field10`)
-    if (entry.filenameField) {
-      if (entry.filenameField.length !== FILENAME_SIZE)
-        throw new Error(
-          `Entry #${index} filename field must be ${FILENAME_SIZE} bytes`,
+  let writtenIndex = 0
+  const writeBlock = (
+    entries: readonly PreparedEntry[],
+    blockOffset: number,
+  ): number => {
+    let dataOffset = blockOffset + entries.length * ENTRY_SIZE
+    entries.forEach((preparedEntry, localIndex) => {
+      const index = writtenIndex++
+      const entry = preparedEntry.source
+      const raw = Buffer.alloc(ENTRY_SIZE)
+      const encodedName = encodeFilename(entry.name)
+      const isDirectory = preparedEntry.type === 'directory'
+      const packedSize = isDirectory
+        ? preparedEntry.children!.length * ENTRY_SIZE
+        : preparedEntry.compressed!.length
+      const unpackedSize = isDirectory ? packedSize : entry.data!.length
+      writeUint32(raw, isDirectory ? 1 : 0, 0, `Entry #${index} field00`)
+      writeUint32(raw, dataOffset, 4, `Entry #${index} dataOffset`)
+      writeUint32(raw, packedSize, 8, `Entry #${index} packedSize`)
+      writeUint32(raw, unpackedSize, 12, `Entry #${index} unpackedSize`)
+      writeUint32(raw, entry.field10 ?? 0, 16, `Entry #${index} field10`)
+      if (entry.filenameField) {
+        if (entry.filenameField.length !== FILENAME_SIZE)
+          throw new Error(
+            `Entry #${index} filename field must be ${FILENAME_SIZE} bytes`,
+          )
+        const zero = entry.filenameField.indexOf(0)
+        const rawName = entry.filenameField.subarray(
+          0,
+          zero < 0 ? FILENAME_SIZE : zero,
         )
-      const zero = entry.filenameField.indexOf(0)
-      const rawName = entry.filenameField.subarray(
-        0,
-        zero < 0 ? FILENAME_SIZE : zero,
-      )
-      if (!rawName.equals(encodedName))
-        throw new Error(
-          `Entry #${index} filename field does not match its name`,
-        )
-      entry.filenameField.copy(raw, FILENAME_OFFSET)
-    } else encodedName.copy(raw, FILENAME_OFFSET)
-    raw.copy(output, HEADER_SIZE + index * ENTRY_SIZE)
-    compressed[index]!.copy(output, dataOffset)
-    dataOffset += compressed[index]!.length
-  })
+        if (!rawName.equals(encodedName))
+          throw new Error(
+            `Entry #${index} filename field does not match its name`,
+          )
+        entry.filenameField.copy(raw, FILENAME_OFFSET)
+      } else encodedName.copy(raw, FILENAME_OFFSET)
+      raw.copy(output, blockOffset + localIndex * ENTRY_SIZE)
+      if (isDirectory)
+        dataOffset = writeBlock(preparedEntry.children!, dataOffset)
+      else {
+        preparedEntry.compressed!.copy(output, dataOffset)
+        dataOffset += preparedEntry.compressed!.length
+      }
+    })
+    return dataOffset
+  }
+  writeBlock(prepared, HEADER_SIZE)
   // 构建结果必须能够被同一套严格解析器重新验证，避免输出部分损坏的 PAK。
   const verification = verifyPak(output)
   if (!verification.valid)

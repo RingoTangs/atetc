@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import type { Buffer } from 'node:buffer'
+import type { PakBuildEntry, PakEntry } from './pak'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -18,6 +19,7 @@ import {
   buildPak,
   comparePakFilenames,
   encodeFilename,
+  flattenPakEntries,
   parsePak,
   verifyPak,
 } from './pak'
@@ -72,9 +74,94 @@ function outputPath(root: string, name: string): string {
   return result
 }
 
-function ensureEmptyDestination(destination: string): void {
-  if (fs.existsSync(destination) && fs.readdirSync(destination).length > 0)
-    throw new Error(`Output directory is not empty: ${destination}`)
+function lstatIfExists(
+  filename: string,
+): ReturnType<typeof fs.lstatSync> | undefined {
+  try {
+    return fs.lstatSync(filename)
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
+      return undefined
+    throw error
+  }
+}
+
+function assertExistingDirectoryPath(filename: string): void {
+  const stats = lstatIfExists(filename)
+  if (!stats) return
+  if (stats.isSymbolicLink())
+    throw new Error(`Extraction path contains a symbolic link: ${filename}`)
+  if (!stats.isDirectory())
+    throw new Error(`Extraction path is not a directory: ${filename}`)
+}
+
+function preflightExtraction(
+  destination: string,
+  entries: readonly PakEntry[],
+): {
+  directories: string[]
+  files: Array<{ entry: PakEntry; target: string; data: Buffer }>
+} {
+  const root = path.resolve(destination)
+  assertExistingDirectoryPath(root)
+  const planned = new Map<string, 'file' | 'directory'>()
+  const targets = new Map<string, string>()
+  const directories = new Set<string>()
+  const files: Array<{ entry: PakEntry; target: string; data: Buffer }> = []
+  const keyFor = (filename: string): string =>
+    process.platform === 'win32' || process.platform === 'darwin'
+      ? filename.toLowerCase()
+      : filename
+
+  for (const entry of flattenPakEntries(entries)) {
+    const target = outputPath(root, entry.path)
+    const relative = path.relative(root, target)
+    const segments = relative.split(path.sep)
+    for (let index = 0; index < segments.length - 1; index++) {
+      const directory = path.join(root, ...segments.slice(0, index + 1))
+      const key = keyFor(directory)
+      if (planned.get(key) === 'file')
+        throw new Error(`Output path collision: ${entry.path}`)
+      planned.set(key, 'directory')
+      targets.set(key, directory)
+      directories.add(directory)
+    }
+    const key = keyFor(target)
+    const expectedType = entry.type
+    const previousType = planned.get(key)
+    if (previousType && previousType !== expectedType)
+      throw new Error(`Output path collision: ${entry.path}`)
+    if (previousType === 'file')
+      throw new Error(`Output path collision: ${entry.path}`)
+    planned.set(key, expectedType)
+    targets.set(key, target)
+    if (entry.type === 'directory') directories.add(target)
+    else
+      files.push({
+        entry,
+        target,
+        data: decompressLzss(entry.packedData, entry.unpackedSize),
+      })
+  }
+
+  // 在真正创建目录前检查所有既有路径，避免合并解包时穿过符号链接或覆盖文件。
+  for (const [key, expectedType] of planned) {
+    const target = targets.get(key)!
+    const stats = lstatIfExists(target)
+    if (!stats) continue
+    if (stats.isSymbolicLink())
+      throw new Error(`Extraction path contains a symbolic link: ${target}`)
+    if (expectedType === 'file')
+      throw new Error(`Output file already exists: ${target}`)
+    if (!stats.isDirectory())
+      throw new Error(`Extraction path is not a directory: ${target}`)
+  }
+  return {
+    directories: [...directories].sort(
+      (left, right) => left.length - right.length,
+    ),
+    files,
+  }
 }
 
 function defaultPackOutput(directory: string): string {
@@ -83,9 +170,12 @@ function defaultPackOutput(directory: string): string {
     : `${directory}.pak`
 }
 
-interface DirectoryFile {
+interface ScannedEntry {
   name: string
+  path: string
   filename: string
+  type: 'file' | 'directory'
+  children?: ScannedEntry[]
 }
 
 function isInside(root: string, candidate: string): boolean {
@@ -96,26 +186,198 @@ function isInside(root: string, candidate: string): boolean {
   )
 }
 
-function scanDirectory(directory: string): DirectoryFile[] {
+function scanDirectory(directory: string): ScannedEntry[] {
   const root = path.resolve(directory)
   const rootStats = fs.lstatSync(root)
   if (!rootStats.isDirectory() || rootStats.isSymbolicLink())
     throw new Error(`Pack input is not a regular directory: ${directory}`)
-  const files: DirectoryFile[] = []
-  const visit = (current: string, segments: string[]): void => {
+  const visit = (current: string, segments: string[]): ScannedEntry[] => {
+    const entries: ScannedEntry[] = []
     for (const item of fs.readdirSync(current, { withFileTypes: true })) {
       const filename = path.join(current, item.name)
       const nextSegments = [...segments, item.name]
       if (item.isSymbolicLink())
         throw new Error(`Symbolic links are not supported: ${filename}`)
-      if (item.isDirectory()) visit(filename, nextSegments)
+      encodeFilename(item.name)
+      if (item.isDirectory())
+        entries.push({
+          name: item.name,
+          path: nextSegments.join('/'),
+          filename,
+          type: 'directory',
+          children: visit(filename, nextSegments),
+        })
       else if (item.isFile())
-        files.push({ name: nextSegments.join('/'), filename })
+        entries.push({
+          name: item.name,
+          path: nextSegments.join('/'),
+          filename,
+          type: 'file',
+        })
       else throw new Error(`Unsupported directory entry: ${filename}`)
     }
+    return entries.sort((left, right) =>
+      comparePakFilenames(left.name, right.name),
+    )
   }
-  visit(root, [])
-  return files
+  return visit(root, [])
+}
+
+function flattenScannedEntries(
+  entries: readonly ScannedEntry[],
+): ScannedEntry[] {
+  const flattened: ScannedEntry[] = []
+  const visit = (items: readonly ScannedEntry[]): void => {
+    for (const entry of items) {
+      flattened.push(entry)
+      if (entry.children) visit(entry.children)
+    }
+  }
+  visit(entries)
+  return flattened
+}
+
+function toBuildEntry(entry: ScannedEntry): PakBuildEntry {
+  if (entry.type === 'directory')
+    return {
+      name: entry.name,
+      children: entry.children!.map(toBuildEntry),
+    }
+  return { name: entry.name, data: fs.readFileSync(entry.filename) }
+}
+
+interface ReferenceBuildStats {
+  reusedFiles: number
+  recompressedFiles: number
+  missingEntries: number
+  addedEntries: number
+}
+
+function referenceFields(
+  entry: PakEntry,
+): Pick<PakBuildEntry, 'field00' | 'field10' | 'filenameField'> {
+  return {
+    field00: entry.field00,
+    field10: entry.field10,
+    filenameField: entry.raw.subarray(FILENAME_OFFSET),
+  }
+}
+
+function buildReferencedFile(
+  reference: PakEntry,
+  scanned: ScannedEntry,
+  stats: ReferenceBuildStats,
+  name = reference.name,
+): PakBuildEntry {
+  const data = fs.readFileSync(scanned.filename)
+  const referenceData = decompressLzss(
+    reference.packedData,
+    reference.unpackedSize,
+  )
+  const unchanged = data.equals(referenceData)
+  if (unchanged) stats.reusedFiles++
+  else stats.recompressedFiles++
+  return {
+    name,
+    data,
+    ...referenceFields(reference),
+    packedData: unchanged ? reference.packedData : undefined,
+  }
+}
+
+function rebuildEntry(entry: PakEntry): PakBuildEntry {
+  if (entry.type === 'directory')
+    return {
+      name: entry.name,
+      children: entry.children!.map(rebuildEntry),
+      ...referenceFields(entry),
+    }
+  return {
+    name: entry.name,
+    data: decompressLzss(entry.packedData, entry.unpackedSize),
+    ...referenceFields(entry),
+  }
+}
+
+function mergeReferenceTree(
+  referenceEntries: readonly PakEntry[],
+  scannedEntries: readonly ScannedEntry[],
+  stats: ReferenceBuildStats,
+): PakBuildEntry[] {
+  const remaining = new Map<string, ScannedEntry>()
+  for (const entry of scannedEntries) {
+    const key = canonicalArchiveName(entry.name)
+    if (remaining.has(key))
+      throw new Error(`Duplicate archive path: ${entry.path}`)
+    remaining.set(key, entry)
+  }
+  const result: PakBuildEntry[] = []
+  for (const reference of referenceEntries) {
+    const key = canonicalArchiveName(reference.name)
+    const scanned = remaining.get(key)
+    if (!scanned) {
+      stats.missingEntries += flattenPakEntries([reference]).length
+      continue
+    }
+    if (reference.type !== scanned.type)
+      throw new Error(
+        `Reference type differs from input directory: ${reference.path}`,
+      )
+    remaining.delete(key)
+    if (reference.type === 'directory')
+      result.push({
+        name: reference.name,
+        children: mergeReferenceTree(
+          reference.children!,
+          scanned.children!,
+          stats,
+        ),
+        ...referenceFields(reference),
+      })
+    else result.push(buildReferencedFile(reference, scanned, stats))
+  }
+  const additions = [...remaining.values()].sort((left, right) =>
+    comparePakFilenames(left.name, right.name),
+  )
+  stats.addedEntries += flattenScannedEntries(additions).length
+  result.push(...additions.map(toBuildEntry))
+  return result
+}
+
+function mergeFlatReference(
+  referenceEntries: readonly PakEntry[],
+  scannedEntries: readonly ScannedEntry[],
+  stats: ReferenceBuildStats,
+): PakBuildEntry[] {
+  const files = flattenScannedEntries(scannedEntries).filter(
+    (entry) => entry.type === 'file',
+  )
+  const remaining = new Map<string, ScannedEntry>()
+  for (const file of files) {
+    const key = canonicalArchiveName(file.path)
+    if (remaining.has(key)) throw new Error(`Duplicate archive path: ${key}`)
+    remaining.set(key, file)
+  }
+  const result: PakBuildEntry[] = []
+  for (const reference of referenceEntries) {
+    const key = canonicalArchiveName(reference.name)
+    const scanned = remaining.get(key)
+    if (!scanned) {
+      stats.missingEntries++
+      continue
+    }
+    remaining.delete(key)
+    result.push(buildReferencedFile(reference, scanned, stats))
+  }
+  const additions = [...remaining.entries()].sort(([left], [right]) =>
+    comparePakFilenames(left, right),
+  )
+  stats.addedEntries += additions.length
+  for (const [name, file] of additions) {
+    encodeFilename(name)
+    result.push({ name, data: fs.readFileSync(file.filename) })
+  }
+  return result
 }
 
 function canonicalArchiveName(name: string): string {
@@ -126,7 +388,7 @@ function printIssues(buffer: Buffer): boolean {
   const result = verifyPak(buffer)
   if (result.valid) {
     console.log(
-      `${success('PASS')}: ${result.archive!.entries.length} entries verified`,
+      `${success('PASS')}: ${result.archive!.entryCount} entries verified`,
     )
     return true
   }
@@ -156,11 +418,11 @@ program
   .argument('<pak>')
   .action((filename: string) => {
     const archive = parsePak(readPak(filename))
-    const packed = archive.entries.reduce(
+    const packed = archive.files.reduce(
       (sum, entry) => sum + entry.packedSize,
       0,
     )
-    const unpacked = archive.entries.reduce(
+    const unpacked = archive.files.reduce(
       (sum, entry) => sum + entry.unpackedSize,
       0,
     )
@@ -169,7 +431,9 @@ program
     )
     console.log(`PAK size: ${archive.size}`)
     console.log(`Index size: ${archive.header.indexSize}`)
-    console.log(`Entry count: ${archive.entries.length}`)
+    console.log(`Root entries: ${archive.entries.length}`)
+    console.log(`Directories: ${archive.directories.length}`)
+    console.log(`Files: ${archive.files.length}`)
     console.log(`Entry size: ${ENTRY_SIZE}`)
     console.log(`Data start: ${archive.dataStart}`)
     console.log(`Compressed size: ${packed}`)
@@ -187,13 +451,15 @@ program
   .option('-l, --long', 'show sizes and compression ratio')
   .action((filename: string, options: { long?: boolean }) => {
     const archive = parsePak(readPak(filename))
+    const entries = flattenPakEntries(archive.entries)
     if (!options.long)
-      for (const entry of archive.entries) console.log(entry.name)
+      for (const entry of entries)
+        console.log(entry.type === 'directory' ? `${entry.path}/` : entry.path)
     else {
       console.log('INDEX  PACKED  ORIGINAL  RATIO    NAME')
-      for (const entry of archive.entries)
+      for (const entry of entries)
         console.log(
-          `${String(entry.index).padEnd(7)}${String(entry.packedSize).padEnd(8)}${String(entry.unpackedSize).padEnd(10)}${ratio(entry.packedSize, entry.unpackedSize).padEnd(9)}${entry.name}`,
+          `${String(entry.index).padEnd(7)}${String(entry.packedSize).padEnd(8)}${String(entry.unpackedSize).padEnd(10)}${ratio(entry.packedSize, entry.unpackedSize).padEnd(9)}${entry.type === 'directory' ? `${entry.path}/` : entry.path}`,
         )
     }
   })
@@ -204,48 +470,48 @@ program
   .argument('<pak>')
   .action((filename: string) => {
     const archive = parsePak(readPak(filename))
+    const entries = flattenPakEntries(archive.entries)
     console.log(`Header hex: ${archive.header.raw.toString('hex')}`)
     console.log(
       `Header uint32: ${[archive.header.magic, archive.header.indexSize, archive.header.field08, archive.header.field0c].join(', ')}`,
     )
     console.log(
-      `Index: ${HEADER_SIZE}..${archive.dataStart} (${archive.entries.length} x ${ENTRY_SIZE})`,
+      `Root index: ${HEADER_SIZE}..${archive.dataStart} (${archive.entries.length} x ${ENTRY_SIZE})`,
     )
     console.log(
-      `Unknown +0x00 values: ${[...new Set(archive.entries.map((entry) => entry.field00))].join(', ')}`,
+      `Entry type values: ${[...new Set(entries.map((entry) => entry.field00))].join(', ')}`,
     )
     console.log(
-      `Unknown +0x10 values: ${[...new Set(archive.entries.map((entry) => entry.field10))].join(', ')}`,
+      `Unknown +0x10 values: ${[...new Set(entries.map((entry) => entry.field10))].join(', ')}`,
     )
     const alignments = [2, 4, 8, 16, 512, 2048]
     console.log(
-      `Aligned offsets: ${alignments.map((alignment) => `${alignment}=${archive.entries.filter((entry) => entry.dataOffset % alignment === 0).length}/${archive.entries.length}`).join(', ')}`,
+      `Aligned offsets: ${alignments.map((alignment) => `${alignment}=${entries.filter((entry) => entry.dataOffset % alignment === 0).length}/${entries.length}`).join(', ')}`,
     )
-    const gaps = archive.entries.map((entry, index) => {
+    const gaps = entries.map((entry, index) => {
       const previousEnd =
         index === 0
           ? archive.dataStart
-          : archive.entries[index - 1]!.dataOffset +
-            archive.entries[index - 1]!.packedSize
+          : entries[index - 1]!.dataOffset + entries[index - 1]!.packedSize
       return entry.dataOffset - previousEnd
     })
     console.log(
-      `Offsets monotonic: ${yesNo(archive.entries.every((entry, index) => index === 0 || entry.dataOffset >= archive.entries[index - 1]!.dataOffset))}`,
+      `Offsets monotonic: ${yesNo(entries.every((entry, index) => index === 0 || entry.dataOffset >= entries[index - 1]!.dataOffset))}`,
     )
     console.log(`Gap values: ${[...new Set(gaps)].join(', ')}`)
     console.log('Entries (first/last):')
     const selected =
-      archive.entries.length <= 6
-        ? archive.entries
-        : [...archive.entries.slice(0, 3), ...archive.entries.slice(-3)]
+      entries.length <= 6
+        ? entries
+        : [...entries.slice(0, 3), ...entries.slice(-3)]
     for (const entry of selected) {
       const previousEnd =
         entry.index === 0
           ? archive.dataStart
-          : archive.entries[entry.index - 1]!.dataOffset +
-            archive.entries[entry.index - 1]!.packedSize
+          : entries[entry.index - 1]!.dataOffset +
+            entries[entry.index - 1]!.packedSize
       console.log(
-        `#${entry.index} offset=${entry.dataOffset} packed=${entry.packedSize} unpacked=${entry.unpackedSize} gap=${entry.dataOffset - previousEnd} name=${JSON.stringify(entry.name)} nameRaw=${entry.nameRaw.toString('hex')} dataHead=${entry.packedData.subarray(0, 16).toString('hex')}`,
+        `#${entry.index} type=${entry.type} offset=${entry.dataOffset} packed=${entry.packedSize} unpacked=${entry.unpackedSize} gap=${entry.dataOffset - previousEnd} path=${JSON.stringify(entry.path)} nameRaw=${entry.nameRaw.toString('hex')} dataHead=${entry.packedData.subarray(0, 16).toString('hex')}`,
       )
     }
   })
@@ -273,30 +539,14 @@ program
       )
     const archive = verification.archive!
     const destination = options.output ?? `${filename}.unpack`
-    ensureEmptyDestination(destination)
-    // 在创建任何文件前完成解压和目标路径检查，尽量避免失败后留下半成品。
-    const seen = new Set<string>()
-    const files = archive.entries.map((entry) => {
-      const target = outputPath(destination, entry.name)
-      const key =
-        process.platform === 'win32' || process.platform === 'darwin'
-          ? target.toLowerCase()
-          : target
-      if (seen.has(key)) throw new Error(`Output path collision: ${entry.name}`)
-      seen.add(key)
-      return {
-        entry,
-        target,
-        data: decompressLzss(entry.packedData, entry.unpackedSize),
-      }
-    })
+    const extraction = preflightExtraction(destination, archive.entries)
     fs.mkdirSync(destination, { recursive: true })
-    for (const file of files) {
-      fs.mkdirSync(path.dirname(file.target), { recursive: true })
+    for (const directory of extraction.directories)
+      fs.mkdirSync(directory, { recursive: true })
+    for (const file of extraction.files)
       fs.writeFileSync(file.target, file.data, { flag: 'wx' })
-    }
     console.log(
-      `${success('Extracted')} ${files.length} files to ${path.resolve(destination)}`,
+      `${success('Extracted')} ${extraction.files.length} files to ${path.resolve(destination)}`,
     )
   })
 
@@ -324,28 +574,9 @@ program
         throw new Error(`${output} already exists; use --force to overwrite it`)
 
       const scanned = scanDirectory(directory)
-      const byName = new Map<string, DirectoryFile>()
-      for (const file of scanned) {
-        const canonical = canonicalArchiveName(file.name)
-        if (byName.has(canonical))
-          throw new Error(`Duplicate archive path: ${canonical}`)
-        encodeFilename(canonical)
-        byName.set(canonical, file)
-      }
-
       let field08 = 0
       let field0c = 0
-      let missingReferenceFiles = 0
-      let reusedCompressedStreams = 0
-      let recompressedReferenceFiles = 0
-      const entries: Array<{
-        name: string
-        data: Buffer
-        field00?: number
-        field10?: number
-        packedData?: Buffer
-        filenameField?: Buffer
-      }> = []
+      let entries: PakBuildEntry[]
       if (options.reference) {
         const referenceBuffer = readPak(options.reference)
         const verification = verifyPak(referenceBuffer)
@@ -356,69 +587,42 @@ program
         const reference = verification.archive!
         field08 = reference.header.field08
         field0c = reference.header.field0c
-        const referenceNames = new Set<string>()
-        for (const entry of reference.entries) {
-          const canonical = canonicalArchiveName(entry.name)
-          if (referenceNames.has(canonical))
-            throw new Error(
-              `Reference contains a duplicate normalized path: ${entry.name}`,
-            )
-          referenceNames.add(canonical)
-          const file = byName.get(canonical)
-          if (!file) {
-            missingReferenceFiles++
-            continue
-          }
-          const data = fs.readFileSync(file.filename)
-          const referenceData = decompressLzss(
-            entry.packedData,
-            entry.unpackedSize,
-          )
-          const unchanged = data.equals(referenceData)
-          if (unchanged) reusedCompressedStreams++
-          else recompressedReferenceFiles++
-          entries.push({
-            name: entry.name,
-            data,
-            field00: entry.field00,
-            field10: entry.field10,
-            packedData: unchanged ? entry.packedData : undefined,
-            filenameField: entry.raw.subarray(FILENAME_OFFSET),
-          })
-          byName.delete(canonical)
+        const stats: ReferenceBuildStats = {
+          reusedFiles: 0,
+          recompressedFiles: 0,
+          missingEntries: 0,
+          addedEntries: 0,
         }
-      }
-      const additions = [...byName.entries()].sort(([left], [right]) =>
-        comparePakFilenames(left, right),
-      )
-      if (!options.reference)
+        entries =
+          reference.directories.length === 0
+            ? mergeFlatReference(reference.entries, scanned, stats)
+            : mergeReferenceTree(reference.entries, scanned, stats)
+        console.log(
+          `${success('Reused')} ${stats.reusedFiles} unchanged compressed stream(s)`,
+        )
+        if (stats.recompressedFiles > 0)
+          console.warn(
+            `${warning('Warning:')} ${stats.recompressedFiles} modified reference file(s) will be recompressed`,
+          )
+        if (stats.missingEntries > 0)
+          console.warn(
+            `${warning('Warning:')} ${stats.missingEntries} reference entry/entries are absent and will be omitted`,
+          )
+        if (stats.addedEntries > 0)
+          console.warn(
+            `${warning('Warning:')} ${stats.addedEntries} new entry/entries will be appended with zero unknown fields`,
+          )
+      } else {
+        entries = scanned.map(toBuildEntry)
         console.warn(
           `${warning('Warning:')} no reference PAK; using deterministic filename order and zero unknown fields`,
         )
-      else {
-        console.log(
-          `${success('Reused')} ${reusedCompressedStreams} unchanged compressed stream(s)`,
-        )
-        if (recompressedReferenceFiles > 0)
-          console.warn(
-            `${warning('Warning:')} ${recompressedReferenceFiles} modified reference file(s) will be recompressed`,
-          )
-        if (missingReferenceFiles > 0)
-          console.warn(
-            `${warning('Warning:')} ${missingReferenceFiles} reference file(s) are absent and will be omitted`,
-          )
-        if (additions.length > 0)
-          console.warn(
-            `${warning('Warning:')} ${additions.length} new file(s) will be appended with zero unknown fields`,
-          )
       }
-      for (const [name, file] of additions)
-        entries.push({ name, data: fs.readFileSync(file.filename) })
 
       const pak = buildPak({ entries, field08, field0c })
       fs.writeFileSync(output, pak, { flag: options.force ? 'w' : 'wx' })
       console.log(
-        `${success('Packed')} ${entries.length} files to ${path.resolve(output)}`,
+        `${success('Packed')} ${flattenScannedEntries(scanned).filter((entry) => entry.type === 'file').length} files to ${path.resolve(output)}`,
       )
     },
   )
@@ -440,15 +644,10 @@ program
     const rebuilt = buildPak({
       field08: original.header.field08,
       field0c: original.header.field0c,
-      entries: original.entries.map((entry) => ({
-        name: entry.name,
-        data: decompressLzss(entry.packedData, entry.unpackedSize),
-        field00: entry.field00,
-        field10: entry.field10,
-      })),
+      entries: original.entries.map(rebuildEntry),
     })
     const result = comparePaks(originalBuffer, rebuilt)
-    console.log(`Original files: ${original.entries.length}`)
+    console.log(`Original files: ${original.files.length}`)
     console.log(`Original verify: ${success('PASS')}`)
     console.log(`Repack: ${success('PASS')}`)
     console.log(`Repacked verify: ${success('PASS')}`)

@@ -1,3 +1,4 @@
+import type { PakBuildEntry, PakEntry } from './pak'
 import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -111,14 +112,70 @@ describe('pak', () => {
     ])
   })
 
-  it('reports the hierarchical pak variant explicitly', () => {
-    const result = verifyPak(
-      fs.readFileSync(
-        path.resolve(import.meta.dirname, '../sample/lib_gs32.pak'),
-      ),
+  it('parses and verifies the real hierarchical sample', () => {
+    const buffer = fs.readFileSync(
+      path.resolve(import.meta.dirname, '../sample/lib_gs32.pak'),
     )
-    expect(result.valid).toBe(false)
-    expect(result.issues[0]?.error).toBe('Directory entries are not supported')
+    const archive = parsePak(buffer)
+    expect(verifyPak(buffer).valid).toBe(true)
+    expect(archive.entries).toHaveLength(6)
+    expect(archive.directories).toHaveLength(518)
+    expect(archive.files).toHaveLength(6288)
+    expect(archive.entryCount).toBe(6806)
+    expect(Math.max(...archive.files.map((entry) => entry.depth))).toBe(6)
+    expect(
+      archive.files.some((entry) => entry.path === 'clone/misc/mixed_agent.o'),
+    ).toBe(true)
+  })
+
+  it('builds nested directories and preserves the hierarchical sample', () => {
+    const nested = parsePak(
+      buildPak({
+        entries: [
+          {
+            name: 'root',
+            children: [
+              { name: 'empty', children: [] },
+              { name: 'hello.txt', data: Buffer.from('hello') },
+            ],
+          },
+        ],
+      }),
+    )
+    expect(nested.directories.map((entry) => entry.path)).toEqual([
+      'root',
+      'root/empty',
+    ])
+    expect(nested.files.map((entry) => entry.path)).toEqual(['root/hello.txt'])
+    expect(verifyPak(buildPak({ entries: [] })).valid).toBe(true)
+
+    const originalBuffer = fs.readFileSync(
+      path.resolve(import.meta.dirname, '../sample/lib_gs32.pak'),
+    )
+    const original = parsePak(originalBuffer)
+    const preserve = (entry: PakEntry): PakBuildEntry =>
+      entry.type === 'directory'
+        ? {
+            name: entry.name,
+            children: entry.children!.map(preserve),
+            field00: entry.field00,
+            field10: entry.field10,
+            filenameField: entry.raw.subarray(20),
+          }
+        : {
+            name: entry.name,
+            data: decompressLzss(entry.packedData, entry.unpackedSize),
+            field00: entry.field00,
+            field10: entry.field10,
+            packedData: entry.packedData,
+            filenameField: entry.raw.subarray(20),
+          }
+    const rebuilt = buildPak({
+      field08: original.header.field08,
+      field0c: original.header.field0c,
+      entries: original.entries.map(preserve),
+    })
+    expect(rebuilt.equals(originalBuffer)).toBe(true)
   })
 
   it('closely reproduces the original classic LZSS streams', () => {
