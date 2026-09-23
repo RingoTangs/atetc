@@ -21,6 +21,7 @@ function yesNo(value: boolean): string {
 }
 
 function safeRelativePath(name: string): string {
+  // 同时按 Windows 和 POSIX 规则检查，避免在不同平台解包时出现路径穿越。
   if (
     name.includes('\0') ||
     /^[a-z]:/i.test(name) ||
@@ -41,6 +42,7 @@ function safeRelativePath(name: string): string {
 function outputPath(root: string, name: string): string {
   const result = path.resolve(root, safeRelativePath(name))
   const relative = path.relative(path.resolve(root), result)
+  // 分段检查后再次验证最终绝对路径，作为路径安全的第二道防线。
   if (relative.startsWith('..') || path.isAbsolute(relative))
     throw new Error(`Archive path escapes output directory: ${name}`)
   return result
@@ -195,6 +197,7 @@ program
     const archive = verification.archive!
     const destination = options.output ?? `${filename}.unpack`
     ensureEmptyDestination(destination)
+    // 在创建任何文件前完成解压和目标路径检查，尽量避免失败后留下半成品。
     const seen = new Set<string>()
     const files = archive.entries.map((entry) => {
       const target = outputPath(destination, entry.name)
@@ -239,6 +242,7 @@ program
           fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8'),
         ) as unknown,
       )
+      // Manifest 是文件顺序与元数据的唯一来源，目录中的额外文件不会被隐式加入。
       const entries = manifest.files.map((file) => {
         const filename = outputPath(directory, file.name)
         const stats = fs.lstatSync(filename)
@@ -273,6 +277,7 @@ program
         `Original verification failed: ${verification.issues[0]?.error}`,
       )
     const original = verification.archive!
+    // 全流程在内存中执行，比较的是重建前后逐条目解压内容，而非压缩流本身。
     const rebuilt = buildPak({
       rawHeader: original.header.raw,
       entries: original.entries.map((entry) => ({

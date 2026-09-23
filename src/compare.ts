@@ -22,6 +22,7 @@ export function comparePaks(
   if (original.entries.length !== generated.entries.length)
     differences.add('entry count differs')
   let matchedFiles = 0
+  // 逻辑一致要求条目数量、顺序、名称和解压内容一致；压缩字节可以不同。
   const totalFiles = Math.max(original.entries.length, generated.entries.length)
   for (let index = 0; index < totalFiles; index++) {
     const left = original.entries[index]
@@ -41,6 +42,7 @@ export function comparePaks(
   }
   const originalGaps = gaps(original)
   const generatedGaps = gaps(generated)
+  // 单独比较相邻数据块间距，区分 padding 差异和压缩算法导致的 offset 差异。
   if (
     originalGaps.length !== generatedGaps.length ||
     originalGaps.some((gap, index) => gap !== generatedGaps[index])

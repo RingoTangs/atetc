@@ -24,6 +24,8 @@ export interface PakManifestFile {
   entryRawHex: string
   sha256: string
 }
+
+// Manifest 同时保存可读字段和原始二进制元数据：前者用于校验，后者用于兼容重建。
 export interface PakManifestV1 {
   version: 1
   format: 'etc-pak'
@@ -80,7 +82,9 @@ export function createManifest(archive: PakArchive): PakManifestV1 {
       originalUnpackedSize: entry.unpackedSize,
       field00: entry.field00,
       field10: entry.field10,
+      // 保存完整 Entry，封包时只覆盖已知字段，未知字段仍使用原始字节。
       entryRawHex: entry.raw.toString('hex'),
+      // SHA-256 用于记录原始解压内容，也为以后复用未修改压缩流预留依据。
       sha256: sha256(decompressLzss(entry.packedData, entry.unpackedSize)),
     })),
   }
@@ -102,6 +106,7 @@ export function parseManifest(value: unknown): PakManifestV1 {
   if (manifest.header.magic !== PAK_MAGIC)
     throw new Error('Invalid manifest magic')
   const compression = manifest.compression
+  // 当前构建器只支持真实样本确认过的参数，拒绝悄悄按另一套参数封包。
   if (
     !compression ||
     compression.type !== 'lzss' ||
