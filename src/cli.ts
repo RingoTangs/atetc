@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Buffer } from 'node:buffer'
+import type { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -8,7 +8,13 @@ import { Command } from 'commander'
 import { comparePaks } from './compare'
 import { ENTRY_SIZE, FILENAME_ENCODING, HEADER_SIZE } from './constants'
 import { decompressLzss } from './lzss'
-import { buildPak, encodeFilename, parsePak, verifyPak } from './pak'
+import {
+  buildPak,
+  comparePakFilenames,
+  encodeFilename,
+  parsePak,
+  verifyPak,
+} from './pak'
 
 function readPak(filename: string): Buffer {
   return fs.readFileSync(filename)
@@ -104,10 +110,6 @@ function scanDirectory(directory: string): DirectoryFile[] {
   }
   visit(root, [])
   return files
-}
-
-function compareArchiveNames(left: string, right: string): number {
-  return Buffer.compare(encodeFilename(left), encodeFilename(right))
 }
 
 function canonicalArchiveName(name: string): string {
@@ -354,7 +356,7 @@ program
         }
       }
       const additions = [...byName.entries()].sort(([left], [right]) =>
-        compareArchiveNames(left, right),
+        comparePakFilenames(left, right),
       )
       if (!options.reference)
         console.warn(

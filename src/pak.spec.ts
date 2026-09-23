@@ -4,7 +4,13 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { comparePaks } from './compare'
 import { decompressLzss } from './lzss'
-import { buildPak, encodeFilename, parsePak, verifyPak } from './pak'
+import {
+  buildPak,
+  comparePakFilenames,
+  encodeFilename,
+  parsePak,
+  verifyPak,
+} from './pak'
 
 const samplePath = path.resolve(import.meta.dirname, '../sample/etc.pak')
 
@@ -74,11 +80,44 @@ describe('pak', () => {
         field08: 1,
         field0c: 2,
         entries: [
-          { name: 'a.txt', data: Buffer.from('a'), field00: 3, field10: 4 },
+          { name: 'a.txt', data: Buffer.from('a'), field00: 0, field10: 4 },
         ],
       }),
     )
     expect(custom.header).toMatchObject({ field08: 1, field0c: 2 })
-    expect(custom.entries[0]).toMatchObject({ field00: 3, field10: 4 })
+    expect(custom.entries[0]).toMatchObject({ field00: 0, field10: 4 })
+  })
+
+  it('reproduces the complete pak filename order', () => {
+    const fullSample = parsePak(
+      fs.readFileSync(
+        path.resolve(import.meta.dirname, '../sample/etc_full.pak'),
+      ),
+    )
+    const names = fullSample.entries.map((entry) => entry.name)
+    expect(names).toHaveLength(1356)
+    expect([...names].sort(comparePakFilenames)).toEqual(names)
+  })
+
+  it('sorts case-insensitively with underscores after letters', () => {
+    const names = ['ac_combat', 'ACHIEVE', 'account', 'a_', 'az', 'a-z']
+    expect(names.sort(comparePakFilenames)).toEqual([
+      'a-z',
+      'account',
+      'ACHIEVE',
+      'ac_combat',
+      'az',
+      'a_',
+    ])
+  })
+
+  it('reports the hierarchical pak variant explicitly', () => {
+    const result = verifyPak(
+      fs.readFileSync(
+        path.resolve(import.meta.dirname, '../sample/lib_gs32.pak'),
+      ),
+    )
+    expect(result.valid).toBe(false)
+    expect(result.issues[0]?.error).toBe('Directory entries are not supported')
   })
 })

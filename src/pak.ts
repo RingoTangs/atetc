@@ -18,8 +18,8 @@ export interface PakHeader {
   raw: Buffer
 }
 
-// 每个索引项固定为 64 字节。field00 与 field10 的真实语义尚未确认，
-// 因此解析和重建时始终保留其原值，而不是假设它们一定为 0。
+// 每个索引项固定为 64 字节。field00 已确认 0 表示文件、1 表示目录索引；
+// field10 的真实语义仍未确认，因此 reference 重建时继续保留其原值。
 export interface PakEntry {
   index: number
   field00: number
@@ -110,6 +110,23 @@ export function encodeFilename(name: string): Buffer {
   return encoded
 }
 
+function filenameSortKey(name: string): Buffer {
+  // 原打包器按 ASCII 大小写不敏感方式比较，并将下划线排在字母之后。
+  // 用 “{” 作为下划线的排序权重，可以精确复现全部真实样本的顺序。
+  const normalized = name.replace(/[A-Z_]/g, (character) =>
+    character === '_' ? '{' : character.toLowerCase(),
+  )
+  return iconv.encode(normalized, FILENAME_ENCODING)
+}
+
+/** 按真实 PAK 打包器使用的文件名规则进行比较。 */
+export function comparePakFilenames(left: string, right: string): number {
+  const leftRaw = encodeFilename(left)
+  const rightRaw = encodeFilename(right)
+  const primary = Buffer.compare(filenameSortKey(left), filenameSortKey(right))
+  return primary === 0 ? Buffer.compare(leftRaw, rightRaw) : primary
+}
+
 /** 从完整 PAK Buffer 解析头部、索引和各条目的压缩数据切片。 */
 export function parsePak(buffer: Buffer): PakArchive {
   if (buffer.length < HEADER_SIZE)
@@ -195,6 +212,16 @@ export function verifyPak(buffer: Buffer): PakVerificationResult {
     if (names.has(entry.name))
       issues.push({ ...context, error: 'Duplicate filename' })
     names.add(entry.name)
+    if (entry.field00 !== 0) {
+      issues.push({
+        ...context,
+        error:
+          entry.field00 === 1
+            ? 'Directory entries are not supported'
+            : `Unsupported entry type: ${entry.field00}`,
+      })
+      continue
+    }
     try {
       decompressLzss(entry.packedData, entry.unpackedSize)
     } catch (error) {
