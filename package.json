@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@10.24.0",
-  "description": "A TypeScript npm library template powered by tsdown.",
+  "description": "CLI and TypeScript library for inspecting, unpacking, and rebuilding etc.pak archives.",
   "author": "RingoTangs",
   "license": "MIT",
   "homepage": "https://github.com/RingoTangs/atetc#readme",
@@ -17,10 +17,10 @@
   },
   "keywords": [
     "typescript",
-    "tsdown",
-    "npm-package",
-    "library",
-    "template"
+    "cli",
+    "pak",
+    "lzss",
+    "archive"
   ],
   "sideEffects": false,
   "exports": {
@@ -32,6 +32,9 @@
   "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
+  "bin": {
+    "atetc": "./dist/cli.mjs"
+  },
   "files": [
     "dist"
   ],
