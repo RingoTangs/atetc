@@ -7,8 +7,7 @@ import { Command } from 'commander'
 import { comparePaks } from './compare'
 import { ENTRY_SIZE, FILENAME_ENCODING, HEADER_SIZE } from './constants'
 import { decompressLzss } from './lzss'
-import { createManifest, parseManifest } from './manifest'
-import { buildPak, parsePak, verifyPak } from './pak'
+import { buildPak, encodeFilename, parsePak, verifyPak } from './pak'
 
 function readPak(filename: string): Buffer {
   return fs.readFileSync(filename)
@@ -57,6 +56,49 @@ function defaultPackOutput(directory: string): string {
   return directory.endsWith('.pak.unpack')
     ? `${directory.slice(0, -'.pak.unpack'.length)}.repacked.pak`
     : `${directory}.pak`
+}
+
+interface DirectoryFile {
+  name: string
+  filename: string
+}
+
+function isInside(root: string, candidate: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate))
+  return (
+    relative === '' ||
+    (!relative.startsWith('..') && !path.isAbsolute(relative))
+  )
+}
+
+function scanDirectory(directory: string): DirectoryFile[] {
+  const root = path.resolve(directory)
+  const rootStats = fs.lstatSync(root)
+  if (!rootStats.isDirectory() || rootStats.isSymbolicLink())
+    throw new Error(`Pack input is not a regular directory: ${directory}`)
+  const files: DirectoryFile[] = []
+  const visit = (current: string, segments: string[]): void => {
+    for (const item of fs.readdirSync(current, { withFileTypes: true })) {
+      const filename = path.join(current, item.name)
+      const nextSegments = [...segments, item.name]
+      if (item.isSymbolicLink())
+        throw new Error(`Symbolic links are not supported: ${filename}`)
+      if (item.isDirectory()) visit(filename, nextSegments)
+      else if (item.isFile())
+        files.push({ name: nextSegments.join('/'), filename })
+      else throw new Error(`Unsupported directory entry: ${filename}`)
+    }
+  }
+  visit(root, [])
+  return files
+}
+
+function compareArchiveNames(left: string, right: string): number {
+  return Buffer.compare(encodeFilename(left), encodeFilename(right))
+}
+
+function canonicalArchiveName(name: string): string {
+  return safeRelativePath(name).split(path.sep).join('/')
 }
 
 function printIssues(buffer: Buffer): boolean {
@@ -201,8 +243,6 @@ program
     const seen = new Set<string>()
     const files = archive.entries.map((entry) => {
       const target = outputPath(destination, entry.name)
-      if (path.relative(path.resolve(destination), target) === 'manifest.json')
-        throw new Error('Archive filename conflicts with manifest.json')
       const key =
         process.platform === 'win32' || process.platform === 'darwin'
           ? target.toLowerCase()
@@ -220,11 +260,6 @@ program
       fs.mkdirSync(path.dirname(file.target), { recursive: true })
       fs.writeFileSync(file.target, file.data, { flag: 'wx' })
     }
-    fs.writeFileSync(
-      path.join(destination, 'manifest.json'),
-      `${JSON.stringify(createManifest(archive), null, 2)}\n`,
-      { flag: 'wx' },
-    )
     console.log(
       `Extracted ${files.length} files to ${path.resolve(destination)}`,
     )
@@ -234,33 +269,78 @@ program
   .command('pack')
   .argument('<directory>')
   .option('-o, --output <pak>')
+  .option(
+    '-r, --reference <pak>',
+    'preserve order and unknown fields from a PAK',
+  )
   .option('-f, --force', 'overwrite output PAK')
   .action(
-    (directory: string, options: { output?: string; force?: boolean }) => {
-      const manifest = parseManifest(
-        JSON.parse(
-          fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8'),
-        ) as unknown,
-      )
-      // Manifest 是文件顺序与元数据的唯一来源，目录中的额外文件不会被隐式加入。
-      const entries = manifest.files.map((file) => {
-        const filename = outputPath(directory, file.name)
-        const stats = fs.lstatSync(filename)
-        if (!stats.isFile() || stats.isSymbolicLink())
-          throw new Error(`Manifest entry is not a regular file: ${file.name}`)
-        return {
-          name: file.name,
-          data: fs.readFileSync(filename),
-          rawEntry: Buffer.from(file.entryRawHex, 'hex'),
-        }
-      })
+    (
+      directory: string,
+      options: { output?: string; reference?: string; force?: boolean },
+    ) => {
       const output = options.output ?? defaultPackOutput(directory)
+      if (isInside(directory, output))
+        throw new Error('Output PAK must be outside the input directory')
+      if (options.reference && isInside(directory, options.reference))
+        throw new Error('Reference PAK must be outside the input directory')
       if (!options.force && fs.existsSync(output))
         throw new Error(`${output} already exists; use --force to overwrite it`)
-      const pak = buildPak({
-        rawHeader: Buffer.from(manifest.header.rawHex, 'hex'),
-        entries,
-      })
+
+      const scanned = scanDirectory(directory)
+      const byName = new Map<string, DirectoryFile>()
+      for (const file of scanned) {
+        const canonical = canonicalArchiveName(file.name)
+        if (byName.has(canonical))
+          throw new Error(`Duplicate archive path: ${canonical}`)
+        encodeFilename(canonical)
+        byName.set(canonical, file)
+      }
+
+      let field08 = 0
+      let field0c = 0
+      const entries: Array<{
+        name: string
+        data: Buffer
+        field00?: number
+        field10?: number
+      }> = []
+      if (options.reference) {
+        const referenceBuffer = readPak(options.reference)
+        const verification = verifyPak(referenceBuffer)
+        if (!verification.valid)
+          throw new Error(
+            `Invalid reference PAK: ${verification.issues[0]?.error}`,
+          )
+        const reference = verification.archive!
+        field08 = reference.header.field08
+        field0c = reference.header.field0c
+        const referenceNames = new Set<string>()
+        for (const entry of reference.entries) {
+          const canonical = canonicalArchiveName(entry.name)
+          if (referenceNames.has(canonical))
+            throw new Error(
+              `Reference contains a duplicate normalized path: ${entry.name}`,
+            )
+          referenceNames.add(canonical)
+          const file = byName.get(canonical)
+          if (!file) continue
+          entries.push({
+            name: entry.name,
+            data: fs.readFileSync(file.filename),
+            field00: entry.field00,
+            field10: entry.field10,
+          })
+          byName.delete(canonical)
+        }
+      }
+      const additions = [...byName.entries()].sort(([left], [right]) =>
+        compareArchiveNames(left, right),
+      )
+      for (const [name, file] of additions)
+        entries.push({ name, data: fs.readFileSync(file.filename) })
+
+      const pak = buildPak({ entries, field08, field0c })
       fs.writeFileSync(output, pak, { flag: options.force ? 'w' : 'wx' })
       console.log(`Packed ${entries.length} files to ${path.resolve(output)}`)
     },
@@ -279,11 +359,13 @@ program
     const original = verification.archive!
     // 全流程在内存中执行，比较的是重建前后逐条目解压内容，而非压缩流本身。
     const rebuilt = buildPak({
-      rawHeader: original.header.raw,
+      field08: original.header.field08,
+      field0c: original.header.field0c,
       entries: original.entries.map((entry) => ({
         name: entry.name,
         data: decompressLzss(entry.packedData, entry.unpackedSize),
-        rawEntry: entry.raw,
+        field00: entry.field00,
+        field10: entry.field10,
       })),
     })
     const result = comparePaks(originalBuffer, rebuilt)

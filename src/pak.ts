@@ -41,11 +41,13 @@ export interface PakArchive {
 export interface PakBuildEntry {
   name: string
   data: Buffer
-  rawEntry: Buffer
+  field00?: number
+  field10?: number
 }
 export interface PakBuildInput {
-  rawHeader: Buffer
   entries: readonly PakBuildEntry[]
+  field08?: number
+  field0c?: number
 }
 export interface VerificationIssue {
   entryIndex?: number
@@ -222,10 +224,19 @@ export function verifyPak(buffer: Buffer): PakVerificationResult {
   return { valid: issues.length === 0, archive, issues }
 }
 
-/** 使用原始 Header/Entry 作为模板重新构建 PAK，保留所有未知元数据。 */
+function writeUint32(
+  buffer: Buffer,
+  value: number,
+  offset: number,
+  label: string,
+): void {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 0xffffffff)
+    throw new Error(`${label} must be a uint32`)
+  buffer.writeUInt32LE(value, offset)
+}
+
+/** 根据文件内容构建 PAK；未提供的未知字段按已确认样本值 0 写入。 */
 export function buildPak(input: PakBuildInput): Buffer {
-  if (input.rawHeader.length !== HEADER_SIZE)
-    throw new Error(`Header must be ${HEADER_SIZE} bytes`)
   const indexSize = input.entries.length * ENTRY_SIZE
   const compressed = input.entries.map((entry) => compressLzss(entry.data))
   const totalSize =
@@ -234,30 +245,20 @@ export function buildPak(input: PakBuildInput): Buffer {
     compressed.reduce((sum, item) => sum + item.length, 0)
   if (totalSize > 0xffffffff) throw new Error('PAK exceeds uint32 size limits')
   const output = Buffer.alloc(totalSize)
-  // 先复制原始 Header，再只更新已经确认含义的 magic 和 indexSize。
-  input.rawHeader.copy(output)
-  output.writeUInt32LE(PAK_MAGIC, 0)
-  output.writeUInt32LE(indexSize, 4)
+  writeUint32(output, PAK_MAGIC, 0, 'magic')
+  writeUint32(output, indexSize, 4, 'indexSize')
+  writeUint32(output, input.field08 ?? 0, 8, 'field08')
+  writeUint32(output, input.field0c ?? 0, 12, 'field0c')
   let dataOffset = HEADER_SIZE + indexSize
   input.entries.forEach((entry, index) => {
-    if (entry.rawEntry.length !== ENTRY_SIZE)
-      throw new Error(`Entry #${index} metadata must be ${ENTRY_SIZE} bytes`)
-    const raw = Buffer.from(entry.rawEntry)
+    const raw = Buffer.alloc(ENTRY_SIZE)
     const encodedName = encodeFilename(entry.name)
-    raw.writeUInt32LE(dataOffset, 4)
-    raw.writeUInt32LE(compressed[index]!.length, 8)
-    raw.writeUInt32LE(entry.data.length, 12)
-    const originalNameField = raw.subarray(FILENAME_OFFSET)
-    const zero = originalNameField.indexOf(0)
-    const originalName = originalNameField.subarray(
-      0,
-      zero < 0 ? originalNameField.length : zero,
-    )
-    // 名称未改变时保留完整的 44 字节字段，包括 NUL 后可能存在的未知填充字节。
-    if (!originalName.equals(encodedName)) {
-      raw.fill(0, FILENAME_OFFSET)
-      encodedName.copy(raw, FILENAME_OFFSET)
-    }
+    writeUint32(raw, entry.field00 ?? 0, 0, `Entry #${index} field00`)
+    writeUint32(raw, dataOffset, 4, `Entry #${index} dataOffset`)
+    writeUint32(raw, compressed[index]!.length, 8, `Entry #${index} packedSize`)
+    writeUint32(raw, entry.data.length, 12, `Entry #${index} unpackedSize`)
+    writeUint32(raw, entry.field10 ?? 0, 16, `Entry #${index} field10`)
+    encodedName.copy(raw, FILENAME_OFFSET)
     raw.copy(output, HEADER_SIZE + index * ENTRY_SIZE)
     compressed[index]!.copy(output, dataOffset)
     dataOffset += compressed[index]!.length

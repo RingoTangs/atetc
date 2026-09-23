@@ -8,7 +8,7 @@ import { buildPak, encodeFilename, parsePak, verifyPak } from './pak'
 
 const samplePath = path.resolve(import.meta.dirname, '../sample/etc.pak')
 
-describe('pAK', () => {
+describe('pak', () => {
   it('parses and verifies the real sample', () => {
     const buffer = fs.readFileSync(samplePath)
     const archive = parsePak(buffer)
@@ -39,11 +39,13 @@ describe('pAK', () => {
     const originalBuffer = fs.readFileSync(samplePath)
     const original = parsePak(originalBuffer)
     const rebuilt = buildPak({
-      rawHeader: original.header.raw,
+      field08: original.header.field08,
+      field0c: original.header.field0c,
       entries: original.entries.map((entry) => ({
         name: entry.name,
-        rawEntry: entry.raw,
         data: decompressLzss(entry.packedData, entry.unpackedSize),
+        field00: entry.field00,
+        field10: entry.field10,
       })),
     })
     expect(verifyPak(rebuilt).valid).toBe(true)
@@ -58,5 +60,25 @@ describe('pAK', () => {
     expect(encodeFilename('中文.txt').length).toBe(8)
     expect(() => encodeFilename('a'.repeat(45))).toThrow('exceeds')
     expect(verifyPak(Buffer.alloc(16)).valid).toBe(false)
+  })
+
+  it('defaults unknown fields to zero and accepts explicit values', () => {
+    const defaults = parsePak(
+      buildPak({ entries: [{ name: 'a.txt', data: Buffer.from('a') }] }),
+    )
+    expect(defaults.header).toMatchObject({ field08: 0, field0c: 0 })
+    expect(defaults.entries[0]).toMatchObject({ field00: 0, field10: 0 })
+
+    const custom = parsePak(
+      buildPak({
+        field08: 1,
+        field0c: 2,
+        entries: [
+          { name: 'a.txt', data: Buffer.from('a'), field00: 3, field10: 4 },
+        ],
+      }),
+    )
+    expect(custom.header).toMatchObject({ field08: 1, field0c: 2 })
+    expect(custom.entries[0]).toMatchObject({ field00: 3, field10: 4 })
   })
 })
