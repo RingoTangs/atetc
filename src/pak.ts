@@ -43,6 +43,8 @@ export interface PakBuildEntry {
   data: Buffer
   field00?: number
   field10?: number
+  packedData?: Buffer
+  filenameField?: Buffer
 }
 export interface PakBuildInput {
   entries: readonly PakBuildEntry[]
@@ -265,7 +267,22 @@ function writeUint32(
 /** 根据文件内容构建 PAK；未提供的未知字段按已确认样本值 0 写入。 */
 export function buildPak(input: PakBuildInput): Buffer {
   const indexSize = input.entries.length * ENTRY_SIZE
-  const compressed = input.entries.map((entry) => compressLzss(entry.data))
+  const compressed = input.entries.map((entry, index) => {
+    if (!entry.packedData) return compressLzss(entry.data)
+    let unpacked: Buffer
+    try {
+      unpacked = decompressLzss(entry.packedData, entry.data.length)
+    } catch (error) {
+      throw new Error(
+        `Entry #${index} has invalid precompressed data: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+    if (!unpacked.equals(entry.data))
+      throw new Error(
+        `Entry #${index} precompressed data does not match its contents`,
+      )
+    return Buffer.from(entry.packedData)
+  })
   const totalSize =
     HEADER_SIZE +
     indexSize +
@@ -285,7 +302,22 @@ export function buildPak(input: PakBuildInput): Buffer {
     writeUint32(raw, compressed[index]!.length, 8, `Entry #${index} packedSize`)
     writeUint32(raw, entry.data.length, 12, `Entry #${index} unpackedSize`)
     writeUint32(raw, entry.field10 ?? 0, 16, `Entry #${index} field10`)
-    encodedName.copy(raw, FILENAME_OFFSET)
+    if (entry.filenameField) {
+      if (entry.filenameField.length !== FILENAME_SIZE)
+        throw new Error(
+          `Entry #${index} filename field must be ${FILENAME_SIZE} bytes`,
+        )
+      const zero = entry.filenameField.indexOf(0)
+      const rawName = entry.filenameField.subarray(
+        0,
+        zero < 0 ? FILENAME_SIZE : zero,
+      )
+      if (!rawName.equals(encodedName))
+        throw new Error(
+          `Entry #${index} filename field does not match its name`,
+        )
+      entry.filenameField.copy(raw, FILENAME_OFFSET)
+    } else encodedName.copy(raw, FILENAME_OFFSET)
     raw.copy(output, HEADER_SIZE + index * ENTRY_SIZE)
     compressed[index]!.copy(output, dataOffset)
     dataOffset += compressed[index]!.length

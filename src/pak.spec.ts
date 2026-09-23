@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { comparePaks } from './compare'
-import { decompressLzss } from './lzss'
+import { compressLzss, decompressLzss } from './lzss'
 import {
   buildPak,
   comparePakFilenames,
@@ -119,5 +119,66 @@ describe('pak', () => {
     )
     expect(result.valid).toBe(false)
     expect(result.issues[0]?.error).toBe('Directory entries are not supported')
+  })
+
+  it('closely reproduces the original classic LZSS streams', () => {
+    const archive = parsePak(fs.readFileSync(samplePath))
+    const recompressed = archive.entries.map((entry) =>
+      compressLzss(decompressLzss(entry.packedData, entry.unpackedSize)),
+    )
+    expect(
+      recompressed.filter((data, index) =>
+        data.equals(archive.entries[index]!.packedData),
+      ),
+    ).toHaveLength(8)
+    expect(
+      recompressed.every(
+        (data, index) => data.length === archive.entries[index]!.packedSize,
+      ),
+    ).toBe(true)
+  })
+
+  it('validates and preserves supplied compressed and filename data', () => {
+    const original = parsePak(fs.readFileSync(samplePath)).entries[0]!
+    const data = decompressLzss(original.packedData, original.unpackedSize)
+    const rebuilt = parsePak(
+      buildPak({
+        entries: [
+          {
+            name: original.name,
+            data,
+            packedData: original.packedData,
+            filenameField: original.raw.subarray(20),
+          },
+        ],
+      }),
+    )
+    expect(rebuilt.entries[0]!.packedData).toEqual(original.packedData)
+    expect(rebuilt.entries[0]!.raw.subarray(20)).toEqual(
+      original.raw.subarray(20),
+    )
+
+    expect(() =>
+      buildPak({
+        entries: [
+          {
+            name: original.name,
+            data: Buffer.from(data).fill(0, 0, 1),
+            packedData: original.packedData,
+          },
+        ],
+      }),
+    ).toThrow('does not match')
+    expect(() =>
+      buildPak({
+        entries: [
+          {
+            name: original.name,
+            data,
+            filenameField: Buffer.alloc(43),
+          },
+        ],
+      }),
+    ).toThrow('must be 44 bytes')
   })
 })

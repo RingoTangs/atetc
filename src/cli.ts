@@ -6,7 +6,12 @@ import process from 'node:process'
 import chalk from 'chalk'
 import { Command } from 'commander'
 import { comparePaks } from './compare'
-import { ENTRY_SIZE, FILENAME_ENCODING, HEADER_SIZE } from './constants'
+import {
+  ENTRY_SIZE,
+  FILENAME_ENCODING,
+  FILENAME_OFFSET,
+  HEADER_SIZE,
+} from './constants'
 import { decompressLzss } from './lzss'
 import {
   buildPak,
@@ -317,11 +322,15 @@ program
       let field08 = 0
       let field0c = 0
       let missingReferenceFiles = 0
+      let reusedCompressedStreams = 0
+      let recompressedReferenceFiles = 0
       const entries: Array<{
         name: string
         data: Buffer
         field00?: number
         field10?: number
+        packedData?: Buffer
+        filenameField?: Buffer
       }> = []
       if (options.reference) {
         const referenceBuffer = readPak(options.reference)
@@ -346,11 +355,21 @@ program
             missingReferenceFiles++
             continue
           }
+          const data = fs.readFileSync(file.filename)
+          const referenceData = decompressLzss(
+            entry.packedData,
+            entry.unpackedSize,
+          )
+          const unchanged = data.equals(referenceData)
+          if (unchanged) reusedCompressedStreams++
+          else recompressedReferenceFiles++
           entries.push({
             name: entry.name,
-            data: fs.readFileSync(file.filename),
+            data,
             field00: entry.field00,
             field10: entry.field10,
+            packedData: unchanged ? entry.packedData : undefined,
+            filenameField: entry.raw.subarray(FILENAME_OFFSET),
           })
           byName.delete(canonical)
         }
@@ -363,6 +382,13 @@ program
           `${warning('Warning:')} no reference PAK; using deterministic filename order and zero unknown fields`,
         )
       else {
+        console.log(
+          `${success('Reused')} ${reusedCompressedStreams} unchanged compressed stream(s)`,
+        )
+        if (recompressedReferenceFiles > 0)
+          console.warn(
+            `${warning('Warning:')} ${recompressedReferenceFiles} modified reference file(s) will be recompressed`,
+          )
         if (missingReferenceFiles > 0)
           console.warn(
             `${warning('Warning:')} ${missingReferenceFiles} reference file(s) are absent and will be omitted`,

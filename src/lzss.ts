@@ -62,81 +62,148 @@ export function decompressLzss(input: Buffer, expectedSize: number): Buffer {
 
 export function compressLzss(input: Buffer): Buffer {
   if (input.length === 0) return Buffer.alloc(0)
-  const dictionary = Buffer.alloc(LZSS_WINDOW_SIZE, LZSS_INITIAL_BYTE)
-  // 按首字节维护字典位置集合，减少无意义比较，但不会漏掉任何有效匹配。
-  const positions = Array.from({ length: 256 }, () => new Set<number>())
-  for (let position = 0; position < LZSS_WINDOW_SIZE; position++)
-    positions[LZSS_INITIAL_BYTE]!.add(position)
-  const chunks: number[] = []
-  let dictionaryPosition = LZSS_INITIAL_POSITION
-  let inputPosition = 0
-  // 覆盖环形字典槽位时同步维护候选索引，保证索引始终反映当前字典内容。
-  const writeDictionary = (value: number): void => {
-    const previous = dictionary[dictionaryPosition]!
-    if (previous !== value) {
-      positions[previous]!.delete(dictionaryPosition)
-      dictionary[dictionaryPosition] = value
-      positions[value]!.add(dictionaryPosition)
+  const nil = LZSS_WINDOW_SIZE
+  const mask = LZSS_WINDOW_SIZE - 1
+  // 额外的 F-1 字节用于比较环形缓冲区末尾的连续 lookahead。
+  const dictionary = Buffer.alloc(
+    LZSS_WINDOW_SIZE + LZSS_MAX_MATCH - 1,
+    LZSS_INITIAL_BYTE,
+  )
+  // 经典 Okumura 实现为每个首字节维护一棵二叉搜索树。
+  const left = new Int32Array(LZSS_WINDOW_SIZE + 1)
+  const right = new Int32Array(LZSS_WINDOW_SIZE + 257)
+  const parent = new Int32Array(LZSS_WINDOW_SIZE + 1)
+  left.fill(nil)
+  right.fill(nil)
+  parent.fill(nil)
+  let matchPosition = 0
+  let matchLength = 0
+
+  const insertNode = (position: number): void => {
+    let comparison = 1
+    let current = LZSS_WINDOW_SIZE + 1 + dictionary[position]!
+    right[position] = nil
+    left[position] = nil
+    matchLength = 0
+    while (true) {
+      if (comparison >= 0) {
+        if (right[current] !== nil) current = right[current]!
+        else {
+          right[current] = position
+          parent[position] = current
+          return
+        }
+      } else if (left[current] !== nil) current = left[current]!
+      else {
+        left[current] = position
+        parent[position] = current
+        return
+      }
+
+      let length = 1
+      for (; length < LZSS_MAX_MATCH; length++) {
+        comparison =
+          dictionary[position + length]! - dictionary[current + length]!
+        if (comparison !== 0) break
+      }
+      // 相同长度时保留最先找到的位置，这与经典 C 版本一致。
+      if (length > matchLength) {
+        matchPosition = current
+        matchLength = length
+        if (length >= LZSS_MAX_MATCH) break
+      }
     }
-    dictionaryPosition = (dictionaryPosition + 1) & (LZSS_WINDOW_SIZE - 1)
+
+    parent[position] = parent[current]!
+    left[position] = left[current]!
+    right[position] = right[current]!
+    parent[left[current]!] = position
+    parent[right[current]!] = position
+    if (right[parent[current]!] === current) right[parent[current]!] = position
+    else left[parent[current]!] = position
+    parent[current] = nil
   }
 
-  while (inputPosition < input.length) {
-    // 先预留 flag 字节，确定这一组 token 后再回填对应 bit。
-    const flagOffset = chunks.length
-    chunks.push(0)
-    let flags = 0
-    for (let bit = 0; bit < 8 && inputPosition < input.length; bit++) {
-      const limit = Math.min(LZSS_MAX_MATCH, input.length - inputPosition)
-      let bestLength = 0
-      let bestPosition = 0
-      if (limit >= LZSS_MIN_MATCH) {
-        for (const candidate of positions[input[inputPosition]!]!) {
-          let length = 0
-          while (length < limit) {
-            const sourcePosition = (candidate + length) & (LZSS_WINDOW_SIZE - 1)
-            let value = dictionary[sourcePosition]!
-            // 解码器允许 match 自引用。若候选位置已被本次 match 的前序字节覆盖，
-            // 比较时必须读取即将写入的输入字节，才能与真实解码过程保持一致。
-            for (let earlier = 0; earlier < length; earlier++) {
-              if (
-                ((dictionaryPosition + earlier) & (LZSS_WINDOW_SIZE - 1)) ===
-                sourcePosition
-              ) {
-                value = input[inputPosition + earlier]!
-                break
-              }
-            }
-            if (value !== input[inputPosition + length]) break
-            length++
-          }
-          if (
-            length > bestLength ||
-            (length === bestLength && candidate < bestPosition)
-          ) {
-            bestLength = length
-            bestPosition = candidate
-          }
-        }
+  const deleteNode = (position: number): void => {
+    if (parent[position] === nil) return
+    let replacement: number
+    if (right[position] === nil) replacement = left[position]!
+    else if (left[position] === nil) replacement = right[position]!
+    else {
+      replacement = left[position]!
+      if (right[replacement] !== nil) {
+        do replacement = right[replacement]!
+        while (right[replacement] !== nil)
+        right[parent[replacement]!] = left[replacement]!
+        parent[left[replacement]!] = parent[replacement]!
+        left[replacement] = left[position]!
+        parent[left[position]!] = replacement
       }
-      if (bestLength >= LZSS_MIN_MATCH) {
-        // match token：低字节保存位置低 8 bit，高字节保存位置高 4 bit 和长度。
-        chunks.push(
-          bestPosition & 0xff,
-          ((bestPosition >> 4) & 0xf0) | (bestLength - LZSS_MIN_MATCH),
-        )
-        for (let index = 0; index < bestLength; index++)
-          writeDictionary(input[inputPosition + index]!)
-        inputPosition += bestLength
-      } else {
-        // flag bit 为 1 表示 literal，字节原样写入压缩流和字典。
-        flags |= 1 << bit
-        const value = input[inputPosition++]!
-        chunks.push(value)
-        writeDictionary(value)
-      }
+      right[replacement] = right[position]!
+      parent[right[position]!] = replacement
     }
-    chunks[flagOffset] = flags
+    parent[replacement] = parent[position]!
+    if (right[parent[position]!] === position)
+      right[parent[position]!] = replacement
+    else left[parent[position]!] = replacement
+    parent[position] = nil
   }
-  return Buffer.from(chunks)
+
+  let dictionaryStart = 0
+  let dictionaryPosition = LZSS_INITIAL_POSITION
+  let inputPosition = 0
+  let bufferedLength = 0
+  while (bufferedLength < LZSS_MAX_MATCH && inputPosition < input.length)
+    dictionary[dictionaryPosition + bufferedLength++] = input[inputPosition++]!
+
+  for (let index = 1; index <= LZSS_MAX_MATCH; index++)
+    insertNode(dictionaryPosition - index)
+  insertNode(dictionaryPosition)
+
+  const output: number[] = []
+  let code = Array.from<number>({ length: 17 }).fill(0)
+  let codePosition = 1
+  let flagMask = 1
+  do {
+    if (matchLength > bufferedLength) matchLength = bufferedLength
+    if (matchLength < LZSS_MIN_MATCH) {
+      matchLength = 1
+      code[0]! |= flagMask
+      code[codePosition++] = dictionary[dictionaryPosition]!
+    } else {
+      code[codePosition++] = matchPosition & 0xff
+      code[codePosition++] =
+        ((matchPosition >> 4) & 0xf0) | (matchLength - LZSS_MIN_MATCH)
+    }
+    flagMask <<= 1
+    if (flagMask === 0x100) {
+      output.push(...code.slice(0, codePosition))
+      code = Array.from<number>({ length: 17 }).fill(0)
+      codePosition = 1
+      flagMask = 1
+    }
+
+    const consumed = matchLength
+    let advanced = 0
+    for (; advanced < consumed && inputPosition < input.length; advanced++) {
+      const value = input[inputPosition++]!
+      deleteNode(dictionaryStart)
+      dictionary[dictionaryStart] = value
+      if (dictionaryStart < LZSS_MAX_MATCH - 1)
+        dictionary[dictionaryStart + LZSS_WINDOW_SIZE] = value
+      dictionaryStart = (dictionaryStart + 1) & mask
+      dictionaryPosition = (dictionaryPosition + 1) & mask
+      insertNode(dictionaryPosition)
+    }
+    while (advanced++ < consumed) {
+      deleteNode(dictionaryStart)
+      dictionaryStart = (dictionaryStart + 1) & mask
+      dictionaryPosition = (dictionaryPosition + 1) & mask
+      bufferedLength--
+      if (bufferedLength > 0) insertNode(dictionaryPosition)
+    }
+  } while (bufferedLength > 0)
+
+  if (codePosition > 1) output.push(...code.slice(0, codePosition))
+  return Buffer.from(output)
 }
