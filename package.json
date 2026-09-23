@@ -62,9 +62,13 @@
     "format:fix": "prettier --write .",
     "typecheck": "tsc -b",
     "check": "pnpm lint && pnpm format && pnpm typecheck && pnpm test:run",
-    "fix": "pnpm lint:fix && pnpm format:fix",
+    "check:fix": "pnpm lint:fix && pnpm format:fix",
     "pack:check": "npm pack --dry-run",
     "prepublishOnly": "pnpm check && pnpm build && pnpm pack:check"
+  },
+  "dependencies": {
+    "chalk": "^6.0.0",
+    "commander": "^15.0.0"
   },
   "devDependencies": {
     "@antfu/eslint-config": "8.3.0",
@@ -77,9 +81,5 @@
     "tsdown": "^0.23.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
-  },
-  "dependencies": {
-    "chalk": "^6.0.0",
-    "commander": "^15.0.0"
   }
 }
