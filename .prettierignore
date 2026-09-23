@@ -1,0 +1,15 @@
+**/.git
+**/.svn
+**/.hg
+**/node_modules
+**/.pnpm-store
+**/dist
+**/build
+**/coverage
+**/pnpm-lock.yaml
+**/*.tsbuildinfo
+**/*.tgz
+**/*.log
+**/.env
+**/.env.*
+**/.gitignore

@@ -1,0 +1,52 @@
+{
+  "compilerOptions": {
+    /* 缓存上次检查结果，加快后续检查。 */
+    "incremental": true,
+    /* 以 ES2020 作为 TypeScript 检查目标；tsdown 根据 package.json 的 engines.node 推断打包目标。 */
+    "target": "ES2020",
+    /* 提供 ES2020 标准 API 的类型提示，不会给运行环境补齐这些 API。 */
+    "lib": ["ES2020"],
+    /* 将每个源码文件视为独立模块，避免顶层变量意外变成全局变量。 */
+    "moduleDetection": "force",
+    /*
+     * 类中的字段使用现代 JavaScript 标准行为。
+     * 例如：class User { name = '小明' } 会直接在实例上定义 name，
+     * 而不是按 this.name = '小明' 的方式赋值，避免意外触发父类 setter。
+     */
+    "useDefineForClassFields": true,
+    /* 使用现代 ES 模块语法，由 tsdown 处理模块打包。 */
+    "module": "ESNext",
+
+    /* 按打包工具的方式查找模块，支持省略导入路径中的文件扩展名。 */
+    "moduleResolution": "bundler",
+
+    /* 开启严格类型检查，例如检查空值和无法推断类型的参数。 */
+    "strict": true,
+    /* 防止 switch 中有代码的分支意外继续执行下一个分支。 */
+    "noFallthroughCasesInSwitch": true,
+    /* 提示未使用的局部变量和导入。 */
+    "noUnusedLocals": true,
+    /* 提示未使用的函数参数；以 _ 开头的参数可以保留。 */
+    "noUnusedParameters": true,
+    /* 只检查类型，不输出 JavaScript 或声明文件；实际打包交给 tsdown。 */
+    "noEmit": true,
+    /*
+     * 让 TypeScript 不再猜测和改写 import/export —— 写了 type 就完全擦除，没写就原样保留。
+     */
+    "verbatimModuleSyntax": true,
+    /*
+     * 只允许写“删掉类型后就是合法 JavaScript”的代码。
+     * 禁止 enum、带值的 namespace、构造函数参数属性、import = 这类会生成额外运行时代码的 TypeScript 专有语法。
+     * 例如：const count: number = 0 可以，去掉 : number 后仍是正常代码。
+     * enum Status { Ready, Done } 不可以，因为它需要转换成额外的 JavaScript 代码。
+     */
+    "erasableSyntaxOnly": true,
+    /* 跳过声明文件内部的类型检查以提速，业务源码仍正常检查。 */
+    "skipLibCheck": true,
+    /*
+     * 把副作用导入从“静默忽略”变成“强制检查”。
+     * 例如：import './setup'，如果找不到 setup 模块就报错。
+     */
+    "noUncheckedSideEffectImports": true
+  }
+}
