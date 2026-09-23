@@ -23,7 +23,7 @@ atetc test-roundtrip etc.pak
 atetc compare etc.pak rebuilt.pak
 ```
 
-`unpack` 只输出归档内的实际文件。`pack` 会递归扫描输入目录，并按文件名的 GB18030 编码字节确定性排序。使用 `--reference` 可以从原始 PAK 保留匹配条目的顺序和未知字段。除非明确传入 `--force`，否则不会覆盖已有 PAK。
+`unpack` 只输出归档内的实际文件。`pack` 会递归扫描输入目录，并复现游戏使用的大小写不敏感文件名顺序，其中下划线排在字母之后。使用 `--reference` 可以从原始 PAK 保留匹配条目的顺序和未知字段。除非明确传入 `--force`，否则不会覆盖已有 PAK。
 
 ## 库 API
 
