@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
+import chalk from 'chalk'
 import { Command } from 'commander'
 import { comparePaks } from './compare'
 import { ENTRY_SIZE, FILENAME_ENCODING, HEADER_SIZE } from './constants'
@@ -17,6 +18,18 @@ function ratio(packed: number, unpacked: number): string {
 }
 function yesNo(value: boolean): string {
   return value ? 'YES' : 'NO'
+}
+
+function success(value: string): string {
+  return chalk.green(value)
+}
+
+function failure(value: string): string {
+  return chalk.red(value)
+}
+
+function warning(value: string): string {
+  return chalk.yellow(value)
 }
 
 function safeRelativePath(name: string): string {
@@ -104,7 +117,9 @@ function canonicalArchiveName(name: string): string {
 function printIssues(buffer: Buffer): boolean {
   const result = verifyPak(buffer)
   if (result.valid) {
-    console.log(`PASS: ${result.archive!.entries.length} entries verified`)
+    console.log(
+      `${success('PASS')}: ${result.archive!.entries.length} entries verified`,
+    )
     return true
   }
   for (const issue of result.issues) {
@@ -112,7 +127,7 @@ function printIssues(buffer: Buffer): boolean {
       issue.entryIndex === undefined
         ? ''
         : `Entry #${issue.entryIndex} (${issue.filename ?? '<unknown>'}), offset=${issue.offset ?? '-'}, packed=${issue.packedSize ?? '-'}, unpacked=${issue.unpackedSize ?? '-'}: `
-    console.error(`${prefix}${issue.error}`)
+    console.error(failure(`${prefix}${issue.error}`))
   }
   return false
 }
@@ -261,7 +276,7 @@ program
       fs.writeFileSync(file.target, file.data, { flag: 'wx' })
     }
     console.log(
-      `Extracted ${files.length} files to ${path.resolve(destination)}`,
+      `${success('Extracted')} ${files.length} files to ${path.resolve(destination)}`,
     )
   })
 
@@ -299,6 +314,7 @@ program
 
       let field08 = 0
       let field0c = 0
+      let missingReferenceFiles = 0
       const entries: Array<{
         name: string
         data: Buffer
@@ -324,7 +340,10 @@ program
             )
           referenceNames.add(canonical)
           const file = byName.get(canonical)
-          if (!file) continue
+          if (!file) {
+            missingReferenceFiles++
+            continue
+          }
           entries.push({
             name: entry.name,
             data: fs.readFileSync(file.filename),
@@ -337,12 +356,28 @@ program
       const additions = [...byName.entries()].sort(([left], [right]) =>
         compareArchiveNames(left, right),
       )
+      if (!options.reference)
+        console.warn(
+          `${warning('Warning:')} no reference PAK; using deterministic filename order and zero unknown fields`,
+        )
+      else {
+        if (missingReferenceFiles > 0)
+          console.warn(
+            `${warning('Warning:')} ${missingReferenceFiles} reference file(s) are absent and will be omitted`,
+          )
+        if (additions.length > 0)
+          console.warn(
+            `${warning('Warning:')} ${additions.length} new file(s) will be appended with zero unknown fields`,
+          )
+      }
       for (const [name, file] of additions)
         entries.push({ name, data: fs.readFileSync(file.filename) })
 
       const pak = buildPak({ entries, field08, field0c })
       fs.writeFileSync(output, pak, { flag: options.force ? 'w' : 'wx' })
-      console.log(`Packed ${entries.length} files to ${path.resolve(output)}`)
+      console.log(
+        `${success('Packed')} ${entries.length} files to ${path.resolve(output)}`,
+      )
     },
   )
 
@@ -370,10 +405,12 @@ program
     })
     const result = comparePaks(originalBuffer, rebuilt)
     console.log(`Original files: ${original.entries.length}`)
-    console.log('Original verify: PASS')
-    console.log('Repack: PASS')
-    console.log('Repacked verify: PASS')
-    console.log(`Roundtrip: ${result.matchedFiles}/${result.totalFiles} MATCH`)
+    console.log(`Original verify: ${success('PASS')}`)
+    console.log(`Repack: ${success('PASS')}`)
+    console.log(`Repacked verify: ${success('PASS')}`)
+    console.log(
+      `Roundtrip: ${result.matchedFiles}/${result.totalFiles} ${result.logicalMatch ? success('MATCH') : failure('MISMATCH')}`,
+    )
     if (!result.logicalMatch) process.exitCode = 1
   })
 
@@ -383,17 +420,25 @@ program
   .argument('<generated>')
   .action((original: string, generated: string) => {
     const result = comparePaks(readPak(original), readPak(generated))
-    console.log(`Logical match: ${yesNo(result.logicalMatch)}`)
-    console.log(`Binary identical: ${yesNo(result.binaryIdentical)}`)
-    console.log(`Files matched: ${result.matchedFiles}/${result.totalFiles}`)
+    console.log(
+      `Logical match: ${result.logicalMatch ? success('YES') : failure('NO')}`,
+    )
+    console.log(
+      `Binary identical: ${result.binaryIdentical ? success('YES') : warning('NO')}`,
+    )
+    console.log(
+      `Files matched: ${result.matchedFiles === result.totalFiles ? success(`${result.matchedFiles}/${result.totalFiles}`) : failure(`${result.matchedFiles}/${result.totalFiles}`)}`,
+    )
     if (result.differences.length > 0)
-      console.log(`Differences: ${result.differences.join(', ')}`)
+      console.warn(
+        `${warning('Differences:')} ${warning(result.differences.join(', '))}`,
+      )
     if (!result.logicalMatch) process.exitCode = 1
   })
 
 program.parseAsync(process.argv).catch((error: unknown) => {
   console.error(
-    `Error: ${error instanceof Error ? error.message : String(error)}`,
+    `${chalk.red.bold('Error:')} ${failure(error instanceof Error ? error.message : String(error))}`,
   )
   process.exitCode = 1
 })
