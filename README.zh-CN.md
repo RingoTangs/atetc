@@ -18,11 +18,12 @@ atetc inspect etc.pak
 atetc verify etc.pak
 atetc unpack etc.pak -o etc.pak.unpack
 atetc pack etc.pak.unpack -o rebuilt.pak
+atetc pack etc.pak.unpack -o compatible.pak --reference etc.pak
 atetc test-roundtrip etc.pak
 atetc compare etc.pak rebuilt.pak
 ```
 
-`unpack` 会在解包文件旁生成 `manifest.json`。`pack` 依赖该 manifest 保留原始条目顺序和未知元数据。除非明确传入 `--force`，否则不会覆盖已有 PAK。
+`unpack` 只输出归档内的实际文件。`pack` 会递归扫描输入目录，并按文件名的 GB18030 编码字节确定性排序。使用 `--reference` 可以从原始 PAK 保留匹配条目的顺序和未知字段。除非明确传入 `--force`，否则不会覆盖已有 PAK。
 
 ## 库 API
 

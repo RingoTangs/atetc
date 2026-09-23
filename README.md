@@ -18,11 +18,12 @@ atetc inspect etc.pak
 atetc verify etc.pak
 atetc unpack etc.pak -o etc.pak.unpack
 atetc pack etc.pak.unpack -o rebuilt.pak
+atetc pack etc.pak.unpack -o compatible.pak --reference etc.pak
 atetc test-roundtrip etc.pak
 atetc compare etc.pak rebuilt.pak
 ```
 
-`unpack` writes a `manifest.json` alongside the extracted files. `pack` requires that manifest so original entry order and unknown metadata are retained. Existing PAK output is never overwritten unless `--force` is supplied.
+`unpack` writes only the files stored in the archive. `pack` recursively scans its input directory and uses a deterministic GB18030 byte-order sort. Pass `--reference` to preserve matching entry order and unknown fields from an original PAK. Existing PAK output is never overwritten unless `--force` is supplied.
 
 ## Library
 
