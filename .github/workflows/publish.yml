@@ -71,12 +71,10 @@ jobs:
           fi
 
           PACKAGE_NAME="$(node -p "require('./package.json').name")"
-          IS_PRERELEASE="$([[ "$VERSION" == *-* ]] && echo true || echo false)"
 
           echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
-          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
 
       - name: Check package
         run: pnpm check
@@ -106,31 +104,3 @@ jobs:
         if: steps.registry.outputs.published != 'true'
         # 检查、构建和打包预览已经在前序步骤完成，避免再次触发 prepublishOnly。
         run: npm publish --ignore-scripts --access public --tag "${{ steps.metadata.outputs.npm_tag }}"
-
-      - name: Normalize npm dist-tags
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          PACKAGE_NAME: ${{ steps.metadata.outputs.package_name }}
-          VERSION: ${{ steps.metadata.outputs.version }}
-          NPM_TAG: ${{ steps.metadata.outputs.npm_tag }}
-          IS_PRERELEASE: ${{ steps.metadata.outputs.is_prerelease }}
-        run: |
-          for attempt in {1..12}; do
-            if npm view "$PACKAGE_NAME@$VERSION" version --prefer-online >/dev/null 2>&1; then
-              break
-            fi
-            if [[ "$attempt" == 12 ]]; then
-              echo "$PACKAGE_NAME@$VERSION is not available from the npm registry" >&2
-              exit 1
-            fi
-            sleep 5
-          done
-
-          npm dist-tag add "$PACKAGE_NAME@$VERSION" "$NPM_TAG"
-
-          if [[ "$IS_PRERELEASE" == "true" ]]; then
-            LATEST="$(npm view "$PACKAGE_NAME" dist-tags.latest --prefer-online 2>/dev/null || true)"
-            if [[ "$LATEST" == *-* ]]; then
-              npm dist-tag rm "$PACKAGE_NAME" latest
-            fi
-          fi
