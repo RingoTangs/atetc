@@ -38,7 +38,7 @@ atetc cmp etc.pak rebuilt.pak
 
 `unpack` writes only the files stored in the archive and recreates directory entries, including empty directories. It may merge into an existing directory after checking every destination; existing files, type conflicts, and symbolic links cause the operation to fail before writing. `pack` recursively scans its input directory, emits real directory entries, and reproduces the game's case-insensitive filename order, where underscores sort after letters. Pass `--reference` to preserve the directory tree, matching entry order, and metadata; unchanged files also reuse their original compressed streams, allowing an unchanged archive to be rebuilt byte-for-byte. Existing PAK output is never overwritten unless `--force` is supplied.
 
-New and modified files use the classic Okumura binary-tree LZSS encoder that most closely matches the original game tool.
+New and modified files use a game-compatible Okumura binary-tree LZSS variant that reproduces every current real-world sample byte-for-byte.
 
 ## Library
 
