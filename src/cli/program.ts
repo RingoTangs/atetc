@@ -58,15 +58,19 @@ export function createCliProgram(): Command {
 
   program
     .command('pack')
-    .description('build an archive from a directory')
+    .description('build an archive using deterministic fallback order')
     .argument('<directory>')
     .option('-o, --output <pak>')
     .option(
       '-r, --reference <pak>',
-      'preserve order and unknown fields from a PAK',
+      'preserve existing entry order and metadata from a PAK',
     )
     .option('-f, --force', 'overwrite output PAK')
     .action(packDirectory)
+    .addHelpText(
+      'after',
+      '\nWithout --reference, entries use deterministic fallback order.\nWith --reference, existing entries preserve the reference PAK order.',
+    )
 
   program
     .command('test-roundtrip')
@@ -81,6 +85,7 @@ export function createCliProgram(): Command {
     .description('compare logical contents and binary representation')
     .argument('<original>')
     .argument('<generated>')
+    .option('-v, --verbose', 'show detailed structural differences')
     .action(compareArchives)
 
   return program

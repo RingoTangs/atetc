@@ -29,5 +29,14 @@ describe('createCliProgram', () => {
     expect(commands.get('pack')!.options.map((option) => option.flags)).toEqual(
       ['-o, --output <pak>', '-r, --reference <pak>', '-f, --force'],
     )
+    expect(
+      commands.get('compare')!.options.map((option) => option.flags),
+    ).toEqual(['-v, --verbose'])
+    expect(commands.get('pack')!.helpInformation()).toContain(
+      'deterministic fallback order',
+    )
+    expect(commands.get('pack')!.helpInformation()).toContain(
+      'preserve existing entry order and metadata',
+    )
   })
 })

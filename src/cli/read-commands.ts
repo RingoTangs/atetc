@@ -23,6 +23,12 @@ export interface ListOptions {
   long?: boolean
 }
 
+export interface CompareOptions {
+  verbose?: boolean
+}
+
+const VERBOSE_DIFFERENCE_LIMIT = 20
+
 function readPak(filename: string): Buffer {
   return fs.readFileSync(filename)
 }
@@ -169,7 +175,84 @@ export function testRoundtrip(filename: string): void {
   if (!result.logicalMatch) process.exitCode = 1
 }
 
-export function compareArchives(original: string, generated: string): void {
+function hex(value: number): string {
+  return `0x${value.toString(16).padStart(8, '0')}`
+}
+
+function printRemaining(total: number): void {
+  if (total > VERBOSE_DIFFERENCE_LIMIT)
+    console.log(`... ${total - VERBOSE_DIFFERENCE_LIMIT} more differences`)
+}
+
+function printVerboseComparison(result: ReturnType<typeof comparePaks>): void {
+  if (result.details.entryOrder.length > 0) {
+    console.log('\n[entry-order]')
+    for (const difference of result.details.entryOrder.slice(
+      0,
+      VERBOSE_DIFFERENCE_LIMIT,
+    )) {
+      console.log(`index ${difference.index}`)
+      console.log(`original: ${difference.original?.path ?? '<missing>'}`)
+      console.log(`rebuilt : ${difference.generated?.path ?? '<missing>'}`)
+    }
+    printRemaining(result.details.entryOrder.length)
+  }
+  if (result.details.metadata.length > 0) {
+    console.log('\n[metadata]')
+    for (const difference of result.details.metadata.slice(
+      0,
+      VERBOSE_DIFFERENCE_LIMIT,
+    )) {
+      console.log(difference.path)
+      for (const field of ['field00', 'field10'] as const) {
+        const values = difference[field]
+        if (!values) continue
+        console.log(`  ${field}:`)
+        console.log(`    original: ${hex(values.original)}`)
+        console.log(`    rebuilt : ${hex(values.generated)}`)
+      }
+    }
+    printRemaining(result.details.metadata.length)
+  }
+  if (result.details.sizes.length > 0) {
+    console.log('\n[size]')
+    for (const difference of result.details.sizes.slice(
+      0,
+      VERBOSE_DIFFERENCE_LIMIT,
+    )) {
+      console.log(difference.path)
+      for (const field of ['packedSize', 'unpackedSize'] as const) {
+        const values = difference[field]
+        if (values.original === values.generated)
+          console.log(`  ${field}: same (${values.original})`)
+        else {
+          console.log(`  ${field}:`)
+          console.log(`    original: ${values.original}`)
+          console.log(`    rebuilt : ${values.generated}`)
+        }
+      }
+    }
+    printRemaining(result.details.sizes.length)
+  }
+  if (result.details.offsets.length > 0) {
+    console.log('\n[offset]')
+    for (const difference of result.details.offsets.slice(
+      0,
+      VERBOSE_DIFFERENCE_LIMIT,
+    )) {
+      console.log(difference.path)
+      console.log(`  original: ${hex(difference.original)}`)
+      console.log(`  rebuilt : ${hex(difference.generated)}`)
+    }
+    printRemaining(result.details.offsets.length)
+  }
+}
+
+export function compareArchives(
+  original: string,
+  generated: string,
+  options: CompareOptions = {},
+): void {
   const result = comparePaks(readPak(original), readPak(generated))
   console.log(
     `Logical match: ${result.logicalMatch ? success('YES') : failure('NO')}`,
@@ -187,5 +270,6 @@ export function compareArchives(original: string, generated: string): void {
     console.warn(
       `${warning('Differences:')} ${warning(result.differences.join(', '))}`,
     )
+  if (options.verbose) printVerboseComparison(result)
   if (!result.logicalMatch) process.exitCode = 1
 }

@@ -8,6 +8,7 @@ import { ENTRY_FLAG_STORED, HEADER_SIZE } from './constants'
 import { compressLzss, decompressLzss, detectLzssProfile } from './lzss'
 import {
   buildPak,
+  compareFallbackPakNames,
   comparePakFilenames,
   encodeFilename,
   parsePak,
@@ -104,7 +105,7 @@ describe('pak', () => {
     expect(custom.entries[0]).toMatchObject({ field00: 0, field10: 4 })
   })
 
-  it('reproduces the complete pak filename order', () => {
+  it('applies the deterministic fallback order to the legacy sample', () => {
     const fullSample = parsePak(
       fs.readFileSync(
         path.resolve(import.meta.dirname, '../sample/etc_full.pak'),
@@ -112,12 +113,13 @@ describe('pak', () => {
     )
     const names = fullSample.entries.map((entry) => entry.name)
     expect(names).toHaveLength(1356)
-    expect([...names].sort(comparePakFilenames)).toEqual(names)
+    expect([...names].sort(compareFallbackPakNames)).toEqual(names)
+    expect(comparePakFilenames).toBe(compareFallbackPakNames)
   })
 
   it('sorts case-insensitively with underscores after letters', () => {
     const names = ['ac_combat', 'ACHIEVE', 'account', 'a_', 'az', 'a-z']
-    expect(names.sort(comparePakFilenames)).toEqual([
+    expect(names.sort(compareFallbackPakNames)).toEqual([
       'a-z',
       'account',
       'ACHIEVE',
@@ -331,6 +333,11 @@ describe('pak', () => {
       binaryIdentical: false,
       matchedFiles: 2,
       totalFiles: 2,
+    })
+    expect(comparePaks(first, reordered).details).toMatchObject({
+      entryOrder: [{ index: 0 }, { index: 1 }],
+      metadata: [],
+      sizes: [],
     })
     const changedResult = comparePaks(first, changed)
     expect(changedResult).toMatchObject({

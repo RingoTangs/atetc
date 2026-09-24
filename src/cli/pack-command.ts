@@ -5,7 +5,7 @@ import { FILENAME_OFFSET } from '../constants'
 import { detectLzssProfile } from '../lzss'
 import {
   buildPak,
-  comparePakFilenames,
+  compareFallbackPakNames,
   encodeFilename,
   flattenPakEntries,
   readPakEntryData,
@@ -102,7 +102,7 @@ function scanDirectory(directory: string): ScannedEntry[] {
       else throw new Error(`Unsupported directory entry: ${filename}`)
     }
     return entries.sort((left, right) =>
-      comparePakFilenames(left.name, right.name),
+      compareFallbackPakNames(left.name, right.name),
     )
   }
   return visit(root, [])
@@ -206,7 +206,7 @@ function mergeReferenceTree(
     else result.push(buildReferencedFile(reference, scanned, stats))
   }
   const additions = [...remaining.values()].sort((left, right) =>
-    comparePakFilenames(left.name, right.name),
+    compareFallbackPakNames(left.name, right.name),
   )
   stats.addedEntries += flattenScannedEntries(additions).length
   result.push(...additions.map(toBuildEntry))
@@ -239,7 +239,7 @@ function mergeFlatReference(
     result.push(buildReferencedFile(reference, scanned, stats))
   }
   const additions = [...remaining.entries()].sort(([left], [right]) =>
-    comparePakFilenames(left, right),
+    compareFallbackPakNames(left, right),
   )
   stats.addedEntries += additions.length
   for (const [name, file] of additions) {
@@ -303,7 +303,7 @@ export function packDirectory(directory: string, options: PackOptions): void {
   } else {
     entries = scanned.map(toBuildEntry)
     console.warn(
-      `${warning('Warning:')} no reference PAK; using deterministic filename order and zero unknown fields`,
+      `${warning('Warning:')} no reference PAK; using deterministic fallback order and zero unknown fields`,
     )
   }
 

@@ -145,21 +145,23 @@ export function encodeFilename(name: string): Buffer {
 }
 
 function filenameSortKey(name: string): Buffer {
-  // 原打包器按 ASCII 大小写不敏感方式比较，并将下划线排在字母之后。
-  // 用 “{” 作为下划线的排序权重，可以精确复现全部真实样本的顺序。
+  // fallback 规则按 ASCII 大小写不敏感方式比较，并将下划线排在字母之后。
   const normalized = name.replace(/[A-Z_]/g, (character) =>
     character === '_' ? '{' : character.toLowerCase(),
   )
   return iconv.encode(normalized, FILENAME_ENCODING)
 }
 
-/** 按真实 PAK 打包器使用的文件名规则进行比较。 */
-export function comparePakFilenames(left: string, right: string): number {
+/** 无 reference 时使用的确定性 fallback 排序，不代表所有原版 PAK 的顺序。 */
+export function compareFallbackPakNames(left: string, right: string): number {
   const leftRaw = encodeFilename(left)
   const rightRaw = encodeFilename(right)
   const primary = Buffer.compare(filenameSortKey(left), filenameSortKey(right))
   return primary === 0 ? Buffer.compare(leftRaw, rightRaw) : primary
 }
+
+/** @deprecated 使用 compareFallbackPakNames；此名称不代表原版排序规则。 */
+export const comparePakFilenames = compareFallbackPakNames
 
 function decodeEntryKind(
   field00: number,

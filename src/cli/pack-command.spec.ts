@@ -4,7 +4,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { detectLzssProfile } from '../lzss'
-import { buildPak, parsePak, readPakEntryData } from '../pak'
+import {
+  buildPak,
+  compareFallbackPakNames,
+  parsePak,
+  readPakEntryData,
+} from '../pak'
 import { packDirectory } from './pack-command'
 import { unpackArchive } from './unpack-command'
 
@@ -22,6 +27,88 @@ afterEach(() => {
 })
 
 describe('reference pack', () => {
+  it('produces byte-identical fallback builds for the same directory', () => {
+    const root = temporaryDirectory()
+    const input = path.join(root, 'input')
+    fs.mkdirSync(input)
+    for (const name of ['z.txt', 'a.txt', 'foo_bar.txt', 'Foo.txt'])
+      fs.writeFileSync(path.join(input, name), name)
+
+    const first = path.join(root, 'first.pak')
+    const second = path.join(root, 'second.pak')
+    packDirectory(input, { output: first })
+    packDirectory(input, { output: second })
+
+    expect(fs.readFileSync(first)).toEqual(fs.readFileSync(second))
+    expect(
+      parsePak(fs.readFileSync(first)).entries.map((entry) => entry.name),
+    ).toEqual(
+      ['z.txt', 'a.txt', 'foo_bar.txt', 'Foo.txt'].sort(
+        compareFallbackPakNames,
+      ),
+    )
+  })
+
+  it('keeps reference order and appends sorted additions', () => {
+    const root = temporaryDirectory()
+    const input = path.join(root, 'input')
+    fs.mkdirSync(input)
+    for (const name of ['A', 'B', 'C', 'D', 'E'])
+      fs.writeFileSync(path.join(input, name), name)
+    const referencePath = path.join(root, 'reference.pak')
+    fs.writeFileSync(
+      referencePath,
+      buildPak({
+        entries: ['C', 'A', 'B'].map((name) => ({
+          name,
+          data: Buffer.from(name),
+          stored: true,
+        })),
+      }),
+    )
+
+    const output = path.join(root, 'output.pak')
+    packDirectory(input, { output, reference: referencePath })
+    expect(
+      parsePak(fs.readFileSync(output)).entries.map((entry) => entry.name),
+    ).toEqual(['C', 'A', 'B', 'D', 'E'])
+  })
+
+  it('keeps reference order at every directory level', () => {
+    const root = temporaryDirectory()
+    const referencePath = path.join(root, 'reference.pak')
+    const reference = buildPak({
+      entries: [
+        {
+          name: 'zdir',
+          children: [
+            { name: 'z.txt', data: Buffer.from('z'), stored: true },
+            { name: 'a.txt', data: Buffer.from('a'), stored: true },
+          ],
+        },
+        { name: 'adir', children: [] },
+        { name: 'file.txt', data: Buffer.from('file'), stored: true },
+      ],
+    })
+    fs.writeFileSync(referencePath, reference)
+    const unpacked = path.join(root, 'unpacked')
+    unpackArchive(referencePath, { output: unpacked })
+
+    const output = path.join(root, 'output.pak')
+    packDirectory(unpacked, { output, reference: referencePath })
+    expect(fs.readFileSync(output)).toEqual(reference)
+    const archive = parsePak(fs.readFileSync(output))
+    expect(archive.entries.map((entry) => entry.name)).toEqual([
+      'zdir',
+      'adir',
+      'file.txt',
+    ])
+    expect(archive.entries[0]!.children!.map((entry) => entry.name)).toEqual([
+      'z.txt',
+      'a.txt',
+    ])
+  })
+
   it('preserves stored mode and the detected LZSS profile', () => {
     const root = temporaryDirectory()
     const referencePath = path.join(root, 'reference.pak')
