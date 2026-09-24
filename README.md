@@ -49,6 +49,26 @@ atetc cmp etc.pak rebuilt.pak
 
 Use `atetc compare original.pak rebuilt.pak --verbose` to inspect the first 20 entry-order, metadata, size, and offset differences. Logical comparison is path-based, so physical ordering differences do not make otherwise identical file contents mismatch.
 
+### Understanding compare results
+
+| Result                         | Meaning                                                                                                                                                                                                              |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Logical match`                | Whether directory paths, file paths and unpacked contents match. Zero-payload entries must also have matching paths and logical metadata. This is the main test of whether two archives are functionally equivalent. |
+| `Structural match`             | Whether entries have the same paths, types, order, `field00`, `field10`, packed/original sizes, and data offsets. It does not require identical compressed bytes, headers, or padding.                               |
+| `Binary identical`             | Whether the complete PAK buffers are byte-for-byte identical. This is the strictest result.                                                                                                                          |
+| `Files matched`                | The number of extractable files whose paths and unpacked contents match.                                                                                                                                             |
+| `Zero-payload entries matched` | The number of opaque zero-payload entries whose paths and key metadata match. This line appears only when either archive contains such entries.                                                                      |
+| `Differences`                  | A summary of detected differences, such as entry order, metadata, sizes, offsets, compressed streams, unpacked contents, headers, or padding.                                                                        |
+
+Common interpretations:
+
+- All three results are `YES`: the archives are exactly identical.
+- Logical is `YES`, while Structural or Binary is `NO`: the usable contents match, but compression, entry order, metadata, or physical layout differs. This is common when rebuilding without a reference archive.
+- Logical and Structural are `YES`, while Binary is `NO`: paths and indexed layout match, but header bytes, padding, or compressed stream bytes may differ.
+- Logical is `NO`: file paths, unpacked contents, directories, or zero-payload entries differ and should be investigated.
+
+Only a Logical `NO` makes `compare` exit with a nonzero status. Structural and Binary `NO` results are warnings when the logical contents still match. Use `--verbose` to show up to 20 entry-order, metadata, size, and offset differences; it does not change the comparison rules. For an ordinary rebuild, Logical `YES` is the minimum success criterion. An unchanged `--reference` roundtrip can normally be expected to produce all three `YES` results.
+
 PAK files share the same LZSS decoding format, but different archives may use the compatible `asktao-17` or `okumura-18` encoder profile. With `--reference`, atetc detects and preserves the original profile when possible; unchanged files preferentially reuse their original compressed streams. Stored/raw reference files remain stored when modified.
 
 Some legacy PAK files also contain file-type entries with a packed size of zero and a nonzero original size. These opaque zero-payload entries are not extracted as empty files, but their position and metadata are preserved by reference-based rebuilding.
