@@ -178,19 +178,19 @@ describe('pak', () => {
     expect(rebuilt.equals(originalBuffer)).toBe(true)
   })
 
-  it('closely reproduces the original classic LZSS streams', () => {
+  it('exactly reproduces the original game LZSS streams', () => {
     const archive = parsePak(fs.readFileSync(samplePath))
-    const recompressed = archive.entries.map((entry) =>
+    const recompressed = archive.files.map((entry) =>
       compressLzss(decompressLzss(entry.packedData, entry.unpackedSize)),
     )
     expect(
-      recompressed.filter((data, index) =>
-        data.equals(archive.entries[index]!.packedData),
+      recompressed.every((data, index) =>
+        data.equals(archive.files[index]!.packedData),
       ),
-    ).toHaveLength(8)
+    ).toBe(true)
     expect(
       recompressed.every(
-        (data, index) => data.length === archive.entries[index]!.packedSize,
+        (data, index) => data.length === archive.files[index]!.packedSize,
       ),
     ).toBe(true)
   })

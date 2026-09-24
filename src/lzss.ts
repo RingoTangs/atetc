@@ -156,6 +156,8 @@ export function compressLzss(input: Buffer): Buffer {
   while (bufferedLength < LZSS_MAX_MATCH && inputPosition < input.length)
     dictionary[dictionaryPosition + bufferedLength++] = input[inputPosition++]!
 
+  // 原游戏编码器只预插入 F - 1 个初始节点；经典实现常见的 <= F
+  // 会改变初始空格匹配的位置，导致真实样本的压缩流无法逐字节复现。
   for (let index = 1; index < LZSS_MAX_MATCH; index++)
     insertNode(dictionaryPosition - index)
   insertNode(dictionaryPosition)
