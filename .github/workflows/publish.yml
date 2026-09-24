@@ -89,5 +89,5 @@ jobs:
         # 检查、构建和打包预览已经在前序步骤完成，避免再次触发 prepublishOnly。
         run: npm publish --ignore-scripts --access public --tag "${{ steps.metadata.outputs.npm_tag }}"
         # 首次创建 npm 包时使用此 secret；配置 Trusted Publisher 后删除这一行。
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # env:
+        #   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
