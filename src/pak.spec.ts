@@ -17,6 +17,7 @@ import {
 } from './pak'
 
 const samplePath = path.resolve(import.meta.dirname, '../sample/etc.pak')
+const REAL_SAMPLE_TEST_TIMEOUT = 20_000
 
 describe('pak', () => {
   it('parses and verifies the real sample', () => {
@@ -129,71 +130,83 @@ describe('pak', () => {
     ])
   })
 
-  it('parses and verifies the real hierarchical sample', () => {
-    const buffer = fs.readFileSync(
-      path.resolve(import.meta.dirname, '../sample/lib_gs32.pak'),
-    )
-    const archive = parsePak(buffer)
-    expect(verifyPak(buffer).valid).toBe(true)
-    expect(archive.entries).toHaveLength(6)
-    expect(archive.directories).toHaveLength(518)
-    expect(archive.files).toHaveLength(6288)
-    expect(archive.entryCount).toBe(6806)
-    expect(Math.max(...archive.files.map((entry) => entry.depth))).toBe(6)
-    expect(
-      archive.files.some((entry) => entry.path === 'clone/misc/mixed_agent.o'),
-    ).toBe(true)
-  })
+  it(
+    'parses and verifies the real hierarchical sample',
+    () => {
+      const buffer = fs.readFileSync(
+        path.resolve(import.meta.dirname, '../sample/lib_gs32.pak'),
+      )
+      const archive = parsePak(buffer)
+      expect(verifyPak(buffer).valid).toBe(true)
+      expect(archive.entries).toHaveLength(6)
+      expect(archive.directories).toHaveLength(518)
+      expect(archive.files).toHaveLength(6288)
+      expect(archive.entryCount).toBe(6806)
+      expect(Math.max(...archive.files.map((entry) => entry.depth))).toBe(6)
+      expect(
+        archive.files.some(
+          (entry) => entry.path === 'clone/misc/mixed_agent.o',
+        ),
+      ).toBe(true)
+    },
+    REAL_SAMPLE_TEST_TIMEOUT,
+  )
 
-  it('builds nested directories and preserves the hierarchical sample', () => {
-    const nested = parsePak(
-      buildPak({
-        entries: [
-          {
-            name: 'root',
-            children: [
-              { name: 'empty', children: [] },
-              { name: 'hello.txt', data: Buffer.from('hello') },
-            ],
-          },
-        ],
-      }),
-    )
-    expect(nested.directories.map((entry) => entry.path)).toEqual([
-      'root',
-      'root/empty',
-    ])
-    expect(nested.files.map((entry) => entry.path)).toEqual(['root/hello.txt'])
-    expect(verifyPak(buildPak({ entries: [] })).valid).toBe(true)
+  it(
+    'builds nested directories and preserves the hierarchical sample',
+    () => {
+      const nested = parsePak(
+        buildPak({
+          entries: [
+            {
+              name: 'root',
+              children: [
+                { name: 'empty', children: [] },
+                { name: 'hello.txt', data: Buffer.from('hello') },
+              ],
+            },
+          ],
+        }),
+      )
+      expect(nested.directories.map((entry) => entry.path)).toEqual([
+        'root',
+        'root/empty',
+      ])
+      expect(nested.files.map((entry) => entry.path)).toEqual([
+        'root/hello.txt',
+      ])
+      expect(verifyPak(buildPak({ entries: [] })).valid).toBe(true)
 
-    const originalBuffer = fs.readFileSync(
-      path.resolve(import.meta.dirname, '../sample/lib_gs32.pak'),
-    )
-    const original = parsePak(originalBuffer)
-    const preserve = (entry: PakEntry): PakBuildEntry =>
-      entry.type === 'directory'
-        ? {
-            name: entry.name,
-            children: entry.children!.map(preserve),
-            field00: entry.field00,
-            field10: entry.field10,
-            filenameField: entry.raw.subarray(20),
-          }
-        : {
-            name: entry.name,
-            data: decompressLzss(entry.packedData, entry.unpackedSize),
-            field00: entry.field00,
-            field10: entry.field10,
-            packedData: entry.packedData,
-            filenameField: entry.raw.subarray(20),
-          }
-    const rebuilt = buildPak({
-      field08: original.header.field08,
-      field0c: original.header.field0c,
-      entries: original.entries.map(preserve),
-    })
-    expect(rebuilt.equals(originalBuffer)).toBe(true)
-  }, 20_000)
+      const originalBuffer = fs.readFileSync(
+        path.resolve(import.meta.dirname, '../sample/lib_gs32.pak'),
+      )
+      const original = parsePak(originalBuffer)
+      const preserve = (entry: PakEntry): PakBuildEntry =>
+        entry.type === 'directory'
+          ? {
+              name: entry.name,
+              children: entry.children!.map(preserve),
+              field00: entry.field00,
+              field10: entry.field10,
+              filenameField: entry.raw.subarray(20),
+            }
+          : {
+              name: entry.name,
+              data: decompressLzss(entry.packedData, entry.unpackedSize),
+              field00: entry.field00,
+              field10: entry.field10,
+              packedData: entry.packedData,
+              filenameField: entry.raw.subarray(20),
+            }
+      const rebuilt = buildPak({
+        field08: original.header.field08,
+        field0c: original.header.field0c,
+        entries: original.entries.map(preserve),
+      })
+      expect(rebuilt.equals(originalBuffer)).toBe(true)
+    },
+    REAL_SAMPLE_TEST_TIMEOUT,
+  )
 
   it('exactly reproduces the original game LZSS streams', () => {
     const archive = parsePak(fs.readFileSync(samplePath))
@@ -348,37 +361,45 @@ describe('pak', () => {
     expect(changedResult.differences).toContain('unpacked content differs')
   })
 
-  it('recognizes stored entries and both profiles in the real aaa samples', () => {
-    const etcBuffer = fs.readFileSync(
-      path.resolve(import.meta.dirname, '../sample/real-etc/aaa/etc.pak'),
-    )
-    const verification = verifyPak(etcBuffer)
-    expect(verification.valid).toBe(true)
-    const stored = verification.archive!.files.filter((entry) => entry.stored)
-    expect(
-      stored.map((entry) => [entry.name, entry.packedSize, entry.unpackedSize]),
-    ).toEqual([
-      ['file_dependence.list', 0, 0],
-      ['hanzi_table.list', 938, 938],
-    ])
-    expect(readPakEntryData(stored[1]!)).toEqual(stored[1]!.packedData)
-
-    const library = parsePak(
-      fs.readFileSync(
-        path.resolve(
-          import.meta.dirname,
-          '../sample/real-etc/aaa/lib_aaa32.pak',
-        ),
-      ),
-    )
-    for (const entryPath of [
-      'aaa/daemons/express_recharged.o',
-      'aaa/start_aaa.o',
-    ]) {
-      const entry = library.files.find((item) => item.path === entryPath)!
-      expect(detectLzssProfile(readPakEntryData(entry), entry.packedData)).toBe(
-        'okumura-18',
+  it(
+    'recognizes stored entries and both profiles in the real aaa samples',
+    () => {
+      const etcBuffer = fs.readFileSync(
+        path.resolve(import.meta.dirname, '../sample/real-etc/aaa/etc.pak'),
       )
-    }
-  }, 20_000)
+      const verification = verifyPak(etcBuffer)
+      expect(verification.valid).toBe(true)
+      const stored = verification.archive!.files.filter((entry) => entry.stored)
+      expect(
+        stored.map((entry) => [
+          entry.name,
+          entry.packedSize,
+          entry.unpackedSize,
+        ]),
+      ).toEqual([
+        ['file_dependence.list', 0, 0],
+        ['hanzi_table.list', 938, 938],
+      ])
+      expect(readPakEntryData(stored[1]!)).toEqual(stored[1]!.packedData)
+
+      const library = parsePak(
+        fs.readFileSync(
+          path.resolve(
+            import.meta.dirname,
+            '../sample/real-etc/aaa/lib_aaa32.pak',
+          ),
+        ),
+      )
+      for (const entryPath of [
+        'aaa/daemons/express_recharged.o',
+        'aaa/start_aaa.o',
+      ]) {
+        const entry = library.files.find((item) => item.path === entryPath)!
+        expect(
+          detectLzssProfile(readPakEntryData(entry), entry.packedData),
+        ).toBe('okumura-18')
+      }
+    },
+    REAL_SAMPLE_TEST_TIMEOUT,
+  )
 })
