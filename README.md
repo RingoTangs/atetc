@@ -51,6 +51,8 @@ Use `atetc compare original.pak rebuilt.pak --verbose` to inspect the first 20 e
 
 PAK files share the same LZSS decoding format, but different archives may use the compatible `asktao-17` or `okumura-18` encoder profile. With `--reference`, atetc detects and preserves the original profile when possible; unchanged files preferentially reuse their original compressed streams. Stored/raw reference files remain stored when modified.
 
+Some legacy PAK files also contain file-type entries with a packed size of zero and a nonzero original size. These opaque zero-payload entries are not extracted as empty files, but their position and metadata are preserved by reference-based rebuilding.
+
 ## Library
 
 ```ts
