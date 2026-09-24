@@ -9,6 +9,15 @@
 - Node.js 22 或更高版本
 - 开发时使用 pnpm 10
 
+## 安装
+
+当前版本为预发布版本，通过 `alpha` dist-tag 发布：
+
+```bash
+npm install --global atetc@alpha
+npx atetc@alpha --version
+```
+
 ## CLI
 
 ```bash

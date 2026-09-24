@@ -9,6 +9,15 @@ The format uses a 16-byte little-endian header, 64-byte index entries, GB18030 f
 - Node.js 22 or newer
 - pnpm 10 for development
 
+## Installation
+
+The current release is a prerelease published under the `alpha` dist-tag:
+
+```bash
+npm install --global atetc@alpha
+npx atetc@alpha --version
+```
+
 ## CLI
 
 ```bash
