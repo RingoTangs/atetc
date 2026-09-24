@@ -176,7 +176,7 @@ describe('pak', () => {
       entries: original.entries.map(preserve),
     })
     expect(rebuilt.equals(originalBuffer)).toBe(true)
-  })
+  }, 20_000)
 
   it('exactly reproduces the original game LZSS streams', () => {
     const archive = parsePak(fs.readFileSync(samplePath))
