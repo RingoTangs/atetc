@@ -1,4 +1,5 @@
 import { Command } from 'commander'
+import pkg from '../../package.json' with { type: 'json' }
 import { packDirectory } from './pack-command'
 import {
   compareArchives,
@@ -14,7 +15,7 @@ export function createCliProgram(): Command {
   const program = new Command()
     .name('atetc')
     .description('Inspect, unpack, verify, and rebuild etc.pak archives')
-    .version('0.1.0')
+    .version(pkg.version)
     .showSuggestionAfterError()
     .addHelpText(
       'after',

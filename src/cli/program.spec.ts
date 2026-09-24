@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import pkg from '../../package.json' with { type: 'json' }
 import { createCliProgram } from './program'
 
 describe('createCliProgram', () => {
@@ -6,6 +7,7 @@ describe('createCliProgram', () => {
     const action = vi.fn()
     const program = createCliProgram().action(action)
     expect(action).not.toHaveBeenCalled()
+    expect(program.version()).toBe(pkg.version)
 
     const commands = new Map(
       program.commands.map((command) => [command.name(), command]),
