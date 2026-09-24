@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { comparePaks } from '../compare'
 import { detectLzssProfile } from '../lzss'
 import {
   buildPak,
@@ -171,5 +172,62 @@ describe('reference pack', () => {
     expect(stored.stored).toBe(true)
     expect(stored.field10).toBe(456)
     expect(readPakEntryData(stored)).toEqual(modifiedStored)
+  })
+
+  it('skips and restores zero-payload entries during reference roundtrips', () => {
+    const root = temporaryDirectory()
+    const referencePath = path.join(root, 'reference.pak')
+    const unpackedPath = path.join(root, 'unpacked')
+    const rebuiltPath = path.join(root, 'rebuilt.pak')
+    const reference = buildPak({
+      entries: [
+        { name: 'A', data: Buffer.from('A'), stored: true },
+        {
+          name: 'opaque',
+          payloadKind: 'none',
+          unpackedSizeOverride: 12345,
+          field10: 0x59e63e14,
+        },
+        { name: 'empty', data: Buffer.alloc(0), stored: true },
+        { name: 'B', data: Buffer.from('B'), stored: true },
+      ],
+    })
+    fs.writeFileSync(referencePath, reference)
+
+    unpackArchive(referencePath, { output: unpackedPath })
+    expect(fs.existsSync(path.join(unpackedPath, 'opaque'))).toBe(false)
+    expect(fs.readFileSync(path.join(unpackedPath, 'empty'))).toEqual(
+      Buffer.alloc(0),
+    )
+
+    packDirectory(unpackedPath, {
+      output: rebuiltPath,
+      reference: referencePath,
+    })
+    const rebuilt = fs.readFileSync(rebuiltPath)
+    expect(rebuilt).toEqual(reference)
+    expect(parsePak(rebuilt).entries.map((entry) => entry.name)).toEqual([
+      'A',
+      'opaque',
+      'empty',
+      'B',
+    ])
+    expect(comparePaks(reference, rebuilt)).toMatchObject({
+      logicalMatch: true,
+      structuralMatch: true,
+      binaryIdentical: true,
+      matchedFiles: 3,
+      totalFiles: 3,
+      matchedZeroPayloadEntries: 1,
+      totalZeroPayloadEntries: 1,
+    })
+
+    fs.writeFileSync(path.join(unpackedPath, 'opaque'), 'replacement')
+    expect(() =>
+      packDirectory(unpackedPath, {
+        output: path.join(root, 'conflict.pak'),
+        reference: referencePath,
+      }),
+    ).toThrow('Reference zero-payload entry conflicts with input path: opaque')
   })
 })

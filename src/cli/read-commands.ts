@@ -50,21 +50,36 @@ function rebuildEntry(entry: PakEntry): PakBuildEntry {
       children: entry.children!.map(rebuildEntry),
       ...referenceFields(entry),
     }
+  if (entry.payloadKind === 'none')
+    return {
+      name: entry.name,
+      payloadKind: 'none',
+      unpackedSizeOverride: entry.unpackedSize,
+      ...referenceFields(entry),
+    }
+  const data = readPakEntryData(entry)
   return {
     name: entry.name,
-    data: readPakEntryData(entry),
+    data,
     stored: entry.stored,
     lzssProfile: entry.stored
       ? undefined
-      : detectLzssProfile(readPakEntryData(entry), entry.packedData),
+      : detectLzssProfile(data, entry.packedData),
     ...referenceFields(entry),
   }
 }
 
 export function showInfo(filename: string): void {
   const archive = parsePak(readPak(filename))
-  const packed = archive.files.reduce((sum, entry) => sum + entry.packedSize, 0)
-  const unpacked = archive.files.reduce(
+  const extractableFiles = archive.files.filter(
+    (entry) => entry.payloadKind !== 'none',
+  )
+  const zeroPayloadEntries = archive.files.length - extractableFiles.length
+  const packed = extractableFiles.reduce(
+    (sum, entry) => sum + entry.packedSize,
+    0,
+  )
+  const unpacked = extractableFiles.reduce(
     (sum, entry) => sum + entry.unpackedSize,
     0,
   )
@@ -74,13 +89,19 @@ export function showInfo(filename: string): void {
   console.log(`Root entries: ${archive.entries.length}`)
   console.log(`Directories: ${archive.directories.length}`)
   console.log(`Files: ${archive.files.length}`)
+  console.log(`Zero-payload entries: ${zeroPayloadEntries}`)
   console.log(`Entry size: ${ENTRY_SIZE}`)
   console.log(`Data start: ${archive.dataStart}`)
   console.log(`Compressed size: ${packed}`)
   console.log(`Uncompressed size: ${unpacked}`)
   console.log(`Compression ratio: ${ratio(packed, unpacked)}`)
   console.log(`Filename encoding: ${FILENAME_ENCODING}`)
-  console.log('Storage: raw/store or LZSS (4096/18/2)')
+  console.log('Storage: raw/store, LZSS (4096/18/2), or zero-payload')
+}
+
+function entryMode(entry: PakEntry): string {
+  if (entry.type === 'directory') return 'DIR'
+  return entry.payloadKind!.toUpperCase()
 }
 
 export function listArchive(filename: string, options: ListOptions): void {
@@ -91,10 +112,10 @@ export function listArchive(filename: string, options: ListOptions): void {
       console.log(entry.type === 'directory' ? `${entry.path}/` : entry.path)
     return
   }
-  console.log('INDEX  PACKED  ORIGINAL  RATIO    NAME')
+  console.log('INDEX  MODE    PACKED  ORIGINAL  RATIO    NAME')
   for (const entry of entries)
     console.log(
-      `${String(entry.index).padEnd(7)}${String(entry.packedSize).padEnd(8)}${String(entry.unpackedSize).padEnd(10)}${ratio(entry.packedSize, entry.unpackedSize).padEnd(9)}${entry.type === 'directory' ? `${entry.path}/` : entry.path}`,
+      `${String(entry.index).padEnd(7)}${entryMode(entry).padEnd(8)}${String(entry.packedSize).padEnd(8)}${String(entry.unpackedSize).padEnd(10)}${(entry.type === 'directory' || entry.payloadKind === 'none' ? '-' : ratio(entry.packedSize, entry.unpackedSize)).padEnd(9)}${entry.type === 'directory' ? `${entry.path}/` : entry.path}`,
     )
 }
 
@@ -141,7 +162,7 @@ export function inspectArchive(filename: string): void {
         : entries[entry.index - 1]!.dataOffset +
           entries[entry.index - 1]!.packedSize
     console.log(
-      `#${entry.index} type=${entry.type} offset=${entry.dataOffset} packed=${entry.packedSize} unpacked=${entry.unpackedSize} gap=${entry.dataOffset - previousEnd} path=${JSON.stringify(entry.path)} nameRaw=${entry.nameRaw.toString('hex')} dataHead=${entry.packedData.subarray(0, 16).toString('hex')}`,
+      `#${entry.index} type=${entry.type} payload=${entry.type === 'directory' ? 'directory' : entry.payloadKind} field00=${hex(entry.field00)} field10=${hex(entry.field10)} offset=${entry.dataOffset} packed=${entry.packedSize} unpacked=${entry.unpackedSize} gap=${entry.dataOffset - previousEnd} path=${JSON.stringify(entry.path)} nameRaw=${entry.nameRaw.toString('hex')} dataHead=${entry.packedData.subarray(0, 16).toString('hex')}`,
     )
   }
 }
@@ -165,7 +186,9 @@ export function testRoundtrip(filename: string): void {
     entries: original.entries.map(rebuildEntry),
   })
   const result = comparePaks(originalBuffer, rebuilt)
-  console.log(`Original files: ${original.files.length}`)
+  console.log(
+    `Original files: ${original.files.filter((entry) => entry.payloadKind !== 'none').length}`,
+  )
   console.log(`Original verify: ${success('PASS')}`)
   console.log(`Repack: ${success('PASS')}`)
   console.log(`Repacked verify: ${success('PASS')}`)
@@ -266,6 +289,10 @@ export function compareArchives(
   console.log(
     `Files matched: ${result.matchedFiles === result.totalFiles ? success(`${result.matchedFiles}/${result.totalFiles}`) : failure(`${result.matchedFiles}/${result.totalFiles}`)}`,
   )
+  if (result.totalZeroPayloadEntries > 0)
+    console.log(
+      `Zero-payload entries matched: ${result.matchedZeroPayloadEntries === result.totalZeroPayloadEntries ? success(`${result.matchedZeroPayloadEntries}/${result.totalZeroPayloadEntries}`) : failure(`${result.matchedZeroPayloadEntries}/${result.totalZeroPayloadEntries}`)}`,
+    )
   if (result.differences.length > 0)
     console.warn(
       `${warning('Differences:')} ${warning(result.differences.join(', '))}`,

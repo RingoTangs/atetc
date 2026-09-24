@@ -23,6 +23,8 @@ export interface PakHeader {
   raw: Buffer
 }
 
+export type PakPayloadKind = 'lzss' | 'stored' | 'none'
+
 // 每个索引项固定为 64 字节。field00 是条目种类和存储 flag 组成的 bitfield；
 // field10 在多个真实样本中表现为 Unix timestamp，但语义尚未完全确认，
 // 因此 reference 重建时必须继续保留原值。
@@ -31,6 +33,8 @@ export interface PakEntry {
   entryOffset: number
   type: 'file' | 'directory'
   stored: boolean
+  /** Present for file entries; directories contain nested index data instead. */
+  payloadKind?: PakPayloadKind
   path: string
   depth: number
   field00: number
@@ -60,6 +64,8 @@ export interface PakBuildEntry {
   field00?: number
   field10?: number
   stored?: boolean
+  payloadKind?: PakPayloadKind
+  unpackedSizeOverride?: number
   lzssProfile?: LzssProfile
   packedData?: Buffer
   filenameField?: Buffer
@@ -184,6 +190,14 @@ function decodeEntryKind(
   }
 }
 
+export function detectPayloadKind(
+  entry: Pick<PakEntry, 'stored' | 'packedSize' | 'unpackedSize'>,
+): PakPayloadKind {
+  if (entry.stored) return 'stored'
+  if (entry.packedSize === 0 && entry.unpackedSize > 0) return 'none'
+  return 'lzss'
+}
+
 /** 从完整 PAK Buffer 解析头部、索引和各条目的压缩数据切片。 */
 export function parsePak(buffer: Buffer): PakArchive {
   if (buffer.length < HEADER_SIZE)
@@ -280,6 +294,14 @@ export function parsePak(buffer: Buffer): PakArchive {
         entryOffset,
         type: entryKind.type,
         stored: entryKind.stored,
+        payloadKind:
+          entryKind.type === 'file'
+            ? detectPayloadKind({
+                stored: entryKind.stored,
+                packedSize,
+                unpackedSize,
+              })
+            : undefined,
         path: entryPath,
         depth,
         field00,
@@ -330,7 +352,10 @@ export function parsePak(buffer: Buffer): PakArchive {
 export function readPakEntryData(entry: PakEntry): Buffer {
   if (entry.type !== 'file')
     throw new Error(`Cannot read directory entry as file: ${entry.path}`)
-  if (entry.stored) {
+  const payloadKind = entry.payloadKind ?? detectPayloadKind(entry)
+  if (payloadKind === 'none')
+    throw new Error(`Entry has no payload: ${entry.path}`)
+  if (payloadKind === 'stored') {
     if (entry.packedSize !== entry.unpackedSize)
       throw new Error(
         `Stored entry has different packed/unpacked size: ${entry.path}`,
@@ -368,7 +393,7 @@ export function verifyPak(buffer: Buffer): PakVerificationResult {
     if (names.has(entry.path))
       issues.push({ ...context, error: 'Duplicate filename' })
     names.add(entry.path)
-    if (entry.type === 'file') {
+    if (entry.type === 'file' && entry.payloadKind !== 'none') {
       try {
         readPakEntryData(entry)
       } catch (error) {
@@ -378,11 +403,12 @@ export function verifyPak(buffer: Buffer): PakVerificationResult {
         })
       }
     }
-    intervals.push({
-      start: entry.dataOffset,
-      end: entry.dataOffset + entry.packedSize,
-      entry,
-    })
+    if (entry.packedSize > 0)
+      intervals.push({
+        start: entry.dataOffset,
+        end: entry.dataOffset + entry.packedSize,
+        entry,
+      })
   }
   intervals.sort((a, b) => a.start - b.start)
   // 按实际数据偏移排序后检查交叠，不要求索引项必须按 offset 排列。
@@ -416,6 +442,8 @@ export function buildPak(input: PakBuildInput): Buffer {
     source: PakBuildEntry
     type: 'file' | 'directory'
     stored: boolean
+    payloadKind?: PakPayloadKind
+    unpackedSize?: number
     payload?: Buffer
     children?: PreparedEntry[]
   }
@@ -425,7 +453,12 @@ export function buildPak(input: PakBuildInput): Buffer {
     const index = preparedIndex++
     const isDirectory = entry.children !== undefined
     if (isDirectory) {
-      if (entry.data !== undefined || entry.packedData !== undefined)
+      if (
+        entry.data !== undefined ||
+        entry.packedData !== undefined ||
+        entry.payloadKind !== undefined ||
+        entry.unpackedSizeOverride !== undefined
+      )
         throw new Error(`Directory entry #${index} must not contain file data`)
       if (entry.stored)
         throw new Error(`Directory entry #${index} cannot be stored`)
@@ -438,8 +471,6 @@ export function buildPak(input: PakBuildInput): Buffer {
         children: entry.children!.map(prepare),
       }
     }
-    if (entry.data === undefined)
-      throw new Error(`File entry #${index} is missing data`)
 
     let requestedStored = entry.stored
     if (entry.field00 !== undefined) {
@@ -451,6 +482,54 @@ export function buildPak(input: PakBuildInput): Buffer {
           `File entry #${index} has conflicting stored and field00 values`,
         )
       requestedStored = decoded.stored
+    }
+    if (entry.payloadKind === 'none') {
+      if (entry.data !== undefined || entry.packedData !== undefined)
+        throw new Error(
+          `Zero-payload entry must not contain data: ${entry.name}`,
+        )
+      if (entry.lzssProfile !== undefined)
+        throw new Error(
+          `Zero-payload entry must not specify an LZSS profile: ${entry.name}`,
+        )
+      if (requestedStored)
+        throw new Error(`Zero-payload entry must not be stored: ${entry.name}`)
+      if (
+        entry.unpackedSizeOverride === undefined ||
+        !Number.isSafeInteger(entry.unpackedSizeOverride) ||
+        entry.unpackedSizeOverride <= 0 ||
+        entry.unpackedSizeOverride > 0xffffffff
+      )
+        throw new Error(
+          `Zero-payload entry requires a positive uint32 unpackedSizeOverride: ${entry.name}`,
+        )
+      return {
+        source: entry,
+        type: 'file',
+        stored: false,
+        payloadKind: 'none',
+        unpackedSize: entry.unpackedSizeOverride,
+        payload: Buffer.alloc(0),
+      }
+    }
+    if (entry.unpackedSizeOverride !== undefined)
+      throw new Error(
+        `File entry #${index} may only override unpacked size for a zero-payload entry`,
+      )
+    if (entry.data === undefined)
+      throw new Error(`File entry #${index} is missing data`)
+    if (entry.payloadKind === 'stored') {
+      if (requestedStored === false)
+        throw new Error(
+          `File entry #${index} has conflicting payloadKind and stored values`,
+        )
+      requestedStored = true
+    } else if (entry.payloadKind === 'lzss') {
+      if (requestedStored === true)
+        throw new Error(
+          `File entry #${index} has conflicting payloadKind and stored values`,
+        )
+      requestedStored = false
     }
     // packedData 既有 API 表示预压缩流；没有显式模式时继续按 compressed 解释。
     if (entry.packedData !== undefined && requestedStored === undefined)
@@ -489,7 +568,14 @@ export function buildPak(input: PakBuildInput): Buffer {
       }
       payload = Buffer.from(entry.packedData)
     } else payload = stored ? Buffer.from(entry.data) : compressed!
-    return { source: entry, type: 'file', stored, payload }
+    return {
+      source: entry,
+      type: 'file',
+      stored,
+      payloadKind: stored ? 'stored' : 'lzss',
+      unpackedSize: entry.data.length,
+      payload,
+    }
   }
 
   const prepared = input.entries.map(prepare)
@@ -526,7 +612,9 @@ export function buildPak(input: PakBuildInput): Buffer {
       const packedSize = isDirectory
         ? preparedEntry.children!.length * ENTRY_SIZE
         : preparedEntry.payload!.length
-      const unpackedSize = isDirectory ? packedSize : entry.data!.length
+      const unpackedSize = isDirectory
+        ? packedSize
+        : preparedEntry.unpackedSize!
       const field00 = isDirectory
         ? ENTRY_KIND_DIRECTORY
         : preparedEntry.stored

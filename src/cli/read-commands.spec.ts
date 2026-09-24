@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildPak } from '../pak'
-import { compareArchives } from './read-commands'
+import { compareArchives, inspectArchive, listArchive } from './read-commands'
 
 const temporaryDirectories: string[] = []
 
@@ -74,5 +74,39 @@ describe('compare command', () => {
     expect(rendered).toContain('unpackedSize: same')
     expect(rendered).toContain('... 2 more differences')
     expect(rendered).not.toContain('index 20\n')
+  })
+
+  it('reports zero-payload modes and comparison counts', () => {
+    const root = temporaryDirectory()
+    const archivePath = path.join(root, 'opaque.pak')
+    fs.writeFileSync(
+      archivePath,
+      buildPak({
+        entries: [
+          {
+            name: 'opaque',
+            payloadKind: 'none',
+            unpackedSizeOverride: 12_345,
+            field10: 456,
+          },
+        ],
+      }),
+    )
+
+    const output: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((...values: unknown[]) =>
+      output.push(values.join(' ')),
+    )
+    listArchive(archivePath, { long: true })
+    inspectArchive(archivePath)
+    compareArchives(archivePath, archivePath)
+
+    const rendered = output.join('\n')
+    expect(rendered).toContain('MODE')
+    expect(rendered).toContain('NONE')
+    expect(rendered).not.toContain('0.00%')
+    expect(rendered).toContain('payload=none')
+    expect(rendered).toContain('field00=0x00000000')
+    expect(rendered).toContain('Zero-payload entries matched: 1/1')
   })
 })

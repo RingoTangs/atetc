@@ -78,6 +78,7 @@ function preflightExtraction(
       : filename
 
   for (const entry of flattenPakEntries(entries)) {
+    if (entry.type === 'file' && entry.payloadKind === 'none') continue
     const target = outputPath(root, entry.path)
     const relative = path.relative(root, target)
     const segments = relative.split(path.sep)

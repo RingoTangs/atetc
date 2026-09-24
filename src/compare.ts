@@ -49,6 +49,8 @@ export interface PakComparisonResult {
   binaryIdentical: boolean
   matchedFiles: number
   totalFiles: number
+  matchedZeroPayloadEntries: number
+  totalZeroPayloadEntries: number
   differences: string[]
   details: PakComparisonDetails
 }
@@ -191,15 +193,59 @@ export function comparePaks(
     sameKeys(originalFiles.entries, generatedFiles.entries)
   if (!filePathsMatch) differences.add('file paths differ')
 
+  const originalExtractable = entriesByPath(
+    original.files.filter((entry) => entry.payloadKind !== 'none'),
+  )
+  const generatedExtractable = entriesByPath(
+    generated.files.filter((entry) => entry.payloadKind !== 'none'),
+  )
+  const originalZeroPayload = entriesByPath(
+    original.files.filter((entry) => entry.payloadKind === 'none'),
+  )
+  const generatedZeroPayload = entriesByPath(
+    generated.files.filter((entry) => entry.payloadKind === 'none'),
+  )
+
   let matchedFiles = 0
-  for (const [entryPath, left] of originalFiles.entries) {
-    const right = generatedFiles.entries.get(entryPath)
+  for (const [entryPath, left] of originalExtractable.entries) {
+    const right = generatedExtractable.entries.get(entryPath)
     if (!right) continue
     if (!left.packedData.equals(right.packedData))
       differences.add('compressed stream differs')
     if (readPakEntryData(left).equals(readPakEntryData(right))) matchedFiles++
     else differences.add('unpacked content differs')
   }
+  const totalFiles = Math.max(
+    originalExtractable.entries.size,
+    generatedExtractable.entries.size,
+  )
+  const extractablePathsMatch =
+    !originalExtractable.duplicate &&
+    !generatedExtractable.duplicate &&
+    sameKeys(originalExtractable.entries, generatedExtractable.entries)
+
+  let matchedZeroPayloadEntries = 0
+  for (const [entryPath, left] of originalZeroPayload.entries) {
+    const right = generatedZeroPayload.entries.get(entryPath)
+    if (
+      right &&
+      left.field00 === right.field00 &&
+      left.field10 === right.field10 &&
+      left.packedSize === right.packedSize &&
+      left.unpackedSize === right.unpackedSize
+    )
+      matchedZeroPayloadEntries++
+  }
+  const totalZeroPayloadEntries = Math.max(
+    originalZeroPayload.entries.size,
+    generatedZeroPayload.entries.size,
+  )
+  const zeroPayloadEntriesMatch =
+    !originalZeroPayload.duplicate &&
+    !generatedZeroPayload.duplicate &&
+    sameKeys(originalZeroPayload.entries, generatedZeroPayload.entries) &&
+    matchedZeroPayloadEntries === totalZeroPayloadEntries
+  if (!zeroPayloadEntriesMatch) differences.add('zero-payload entries differ')
 
   const originalGaps = gaps(original)
   const generatedGaps = gaps(generated)
@@ -209,7 +255,6 @@ export function comparePaks(
   )
     differences.add('padding differs')
 
-  const totalFiles = Math.max(original.files.length, generated.files.length)
   const pathsStructurallyMatch =
     !originalAll.duplicate &&
     !generatedAll.duplicate &&
@@ -218,8 +263,9 @@ export function comparePaks(
     logicalMatch:
       directoryPathsMatch &&
       filePathsMatch &&
+      extractablePathsMatch &&
       matchedFiles === totalFiles &&
-      original.files.length === generated.files.length,
+      zeroPayloadEntriesMatch,
     structuralMatch:
       pathsStructurallyMatch &&
       entryOrder.length === 0 &&
@@ -229,6 +275,8 @@ export function comparePaks(
     binaryIdentical: originalBuffer.equals(generatedBuffer),
     matchedFiles,
     totalFiles,
+    matchedZeroPayloadEntries,
+    totalZeroPayloadEntries,
     differences: [...differences],
     details: { entryOrder, metadata, sizes, offsets },
   }

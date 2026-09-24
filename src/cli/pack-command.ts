@@ -141,6 +141,15 @@ function referenceFields(
   }
 }
 
+function buildZeroPayloadReference(entry: PakEntry): PakBuildEntry {
+  return {
+    name: entry.name,
+    payloadKind: 'none',
+    unpackedSizeOverride: entry.unpackedSize,
+    ...referenceFields(entry),
+  }
+}
+
 function buildReferencedFile(
   reference: PakEntry,
   scanned: ScannedEntry,
@@ -184,6 +193,14 @@ function mergeReferenceTree(
   for (const reference of referenceEntries) {
     const key = canonicalArchiveName(reference.name)
     const scanned = remaining.get(key)
+    if (reference.type === 'file' && reference.payloadKind === 'none') {
+      if (scanned)
+        throw new Error(
+          `Reference zero-payload entry conflicts with input path: ${reference.path}`,
+        )
+      result.push(buildZeroPayloadReference(reference))
+      continue
+    }
     if (!scanned) {
       stats.missingEntries += flattenPakEntries([reference]).length
       continue
@@ -231,6 +248,14 @@ function mergeFlatReference(
   for (const reference of referenceEntries) {
     const key = canonicalArchiveName(reference.name)
     const scanned = remaining.get(key)
+    if (reference.payloadKind === 'none') {
+      if (scanned)
+        throw new Error(
+          `Reference zero-payload entry conflicts with input path: ${reference.path}`,
+        )
+      result.push(buildZeroPayloadReference(reference))
+      continue
+    }
     if (!scanned) {
       stats.missingEntries++
       continue

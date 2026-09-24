@@ -306,6 +306,69 @@ describe('pak', () => {
     })
   })
 
+  it('supports zero-payload entries without treating empty stored files as none', () => {
+    const buffer = buildPak({
+      entries: [
+        {
+          name: 'empty.txt',
+          data: Buffer.alloc(0),
+          stored: true,
+        },
+        {
+          name: 'opaque',
+          payloadKind: 'none',
+          unpackedSizeOverride: 12_345,
+          field10: 456,
+        },
+        {
+          name: 'next.txt',
+          data: Buffer.from('next'),
+          stored: true,
+        },
+      ],
+    })
+    const verification = verifyPak(buffer)
+    expect(verification.valid).toBe(true)
+    const [empty, opaque, next] = verification.archive!.files
+    expect(empty).toMatchObject({
+      payloadKind: 'stored',
+      packedSize: 0,
+      unpackedSize: 0,
+    })
+    expect(readPakEntryData(empty!)).toEqual(Buffer.alloc(0))
+    expect(opaque).toMatchObject({
+      payloadKind: 'none',
+      stored: false,
+      packedSize: 0,
+      unpackedSize: 12_345,
+      field10: 456,
+    })
+    expect(() => readPakEntryData(opaque!)).toThrow(
+      'Entry has no payload: opaque',
+    )
+    expect(opaque!.dataOffset).toBe(next!.dataOffset)
+  })
+
+  it('validates zero-payload build inputs', () => {
+    expect(() =>
+      buildPak({
+        entries: [
+          {
+            name: 'opaque',
+            data: Buffer.alloc(0),
+            payloadKind: 'none',
+            unpackedSizeOverride: 1,
+          },
+        ],
+      }),
+    ).toThrow('Zero-payload entry must not contain data')
+    expect(() =>
+      buildPak({
+        entries: [{ name: 'opaque', payloadKind: 'none' }],
+      }),
+    ).toThrow('requires a positive uint32 unpackedSizeOverride')
+  })
+
   it('rejects a stored directory bitfield', () => {
     const buffer = buildPak({ entries: [{ name: 'dir', children: [] }] })
     buffer.writeUInt32LE(ENTRY_FLAG_STORED + 1, HEADER_SIZE)
@@ -361,6 +424,33 @@ describe('pak', () => {
     expect(changedResult.differences).toContain('unpacked content differs')
   })
 
+  it('compares zero-payload entries separately from extractable files', () => {
+    const build = (unpackedSizeOverride: number): Buffer =>
+      buildPak({
+        entries: [
+          { name: 'file', data: Buffer.from('file'), stored: true },
+          {
+            name: 'opaque',
+            payloadKind: 'none',
+            unpackedSizeOverride,
+            field10: 123,
+          },
+        ],
+      })
+    expect(comparePaks(build(99), build(99))).toMatchObject({
+      logicalMatch: true,
+      matchedFiles: 1,
+      totalFiles: 1,
+      matchedZeroPayloadEntries: 1,
+      totalZeroPayloadEntries: 1,
+    })
+    expect(comparePaks(build(99), build(100))).toMatchObject({
+      logicalMatch: false,
+      matchedZeroPayloadEntries: 0,
+      totalZeroPayloadEntries: 1,
+    })
+  })
+
   it(
     'recognizes stored entries and both profiles in the real aaa samples',
     () => {
@@ -399,6 +489,30 @@ describe('pak', () => {
           detectLzssProfile(readPakEntryData(entry), entry.packedData),
         ).toBe('okumura-18')
       }
+    },
+    REAL_SAMPLE_TEST_TIMEOUT,
+  )
+
+  it(
+    'verifies the real dba sample with a zero-payload entry',
+    () => {
+      const verification = verifyPak(
+        fs.readFileSync(
+          path.resolve(import.meta.dirname, '../sample/real-etc/dba/etc.pak'),
+        ),
+      )
+      expect(verification.valid).toBe(true)
+      const opaque = verification.archive!.files.find(
+        (entry) => entry.name === 'etc',
+      )
+      expect(opaque).toMatchObject({
+        payloadKind: 'none',
+        field00: 0,
+        dataOffset: 6_901_897,
+        packedSize: 0,
+        unpackedSize: 7_829_223,
+        field10: 0x59e63e14,
+      })
     },
     REAL_SAMPLE_TEST_TIMEOUT,
   )
