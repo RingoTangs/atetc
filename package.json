@@ -1,8 +1,7 @@
 {
   "name": "atetc",
   "type": "module",
-  "version": "0.1.1-alpha.0",
-  "private": true,
+  "version": "0.1.1-alpha.1",
   "packageManager": "pnpm@10.24.0",
   "description": "CLI and TypeScript library for inspecting, unpacking, and rebuilding etc.pak archives.",
   "author": "RingoTangs",
@@ -38,6 +37,10 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "engines": {
     "node": ">=22.12.0"
   },
