@@ -34,7 +34,7 @@ export function printIssues(buffer: Buffer): boolean {
     const prefix =
       issue.entryIndex === undefined
         ? ''
-        : `Entry #${issue.entryIndex} (${issue.filename ?? '<unknown>'}), offset=${issue.offset ?? '-'}, packed=${issue.packedSize ?? '-'}, unpacked=${issue.unpackedSize ?? '-'}: `
+        : `Entry #${issue.entryIndex} (${issue.filename ?? '<unknown>'}), field00=${issue.field00 === undefined ? '-' : `0x${issue.field00.toString(16).padStart(8, '0')}`}, offset=${issue.offset ?? '-'}, packed=${issue.packedSize ?? '-'}, unpacked=${issue.unpackedSize ?? '-'}: `
     console.error(failure(`${prefix}${issue.error}`))
   }
   return false

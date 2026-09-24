@@ -9,8 +9,14 @@ import {
   FILENAME_OFFSET,
   HEADER_SIZE,
 } from '../constants'
-import { decompressLzss } from '../lzss'
-import { buildPak, flattenPakEntries, parsePak, verifyPak } from '../pak'
+import { detectLzssProfile } from '../lzss'
+import {
+  buildPak,
+  flattenPakEntries,
+  parsePak,
+  readPakEntryData,
+  verifyPak,
+} from '../pak'
 import { failure, printIssues, ratio, success, warning, yesNo } from './output'
 
 export interface ListOptions {
@@ -40,7 +46,11 @@ function rebuildEntry(entry: PakEntry): PakBuildEntry {
     }
   return {
     name: entry.name,
-    data: decompressLzss(entry.packedData, entry.unpackedSize),
+    data: readPakEntryData(entry),
+    stored: entry.stored,
+    lzssProfile: entry.stored
+      ? undefined
+      : detectLzssProfile(readPakEntryData(entry), entry.packedData),
     ...referenceFields(entry),
   }
 }
@@ -64,7 +74,7 @@ export function showInfo(filename: string): void {
   console.log(`Uncompressed size: ${unpacked}`)
   console.log(`Compression ratio: ${ratio(packed, unpacked)}`)
   console.log(`Filename encoding: ${FILENAME_ENCODING}`)
-  console.log('Compression algorithm: LZSS (4096/18/2)')
+  console.log('Storage: raw/store or LZSS (4096/18/2)')
 }
 
 export function listArchive(filename: string, options: ListOptions): void {
@@ -163,6 +173,9 @@ export function compareArchives(original: string, generated: string): void {
   const result = comparePaks(readPak(original), readPak(generated))
   console.log(
     `Logical match: ${result.logicalMatch ? success('YES') : failure('NO')}`,
+  )
+  console.log(
+    `Structural match: ${result.structuralMatch ? success('YES') : warning('NO')}`,
   )
   console.log(
     `Binary identical: ${result.binaryIdentical ? success('YES') : warning('NO')}`,

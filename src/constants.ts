@@ -6,6 +6,12 @@ export const FILENAME_OFFSET = 20
 export const FILENAME_SIZE = ENTRY_SIZE - FILENAME_OFFSET
 export const FILENAME_ENCODING = 'gb18030'
 
+// field00 的低 31 位表示条目种类，最高位表示文件 payload 未压缩存储。
+export const ENTRY_KIND_FILE = 0
+export const ENTRY_KIND_DIRECTORY = 1
+export const ENTRY_FLAG_STORED = 0x80000000
+export const ENTRY_KIND_MASK = 0x7fffffff
+
 // 经典 LZSS 参数。初始写入位置特意留出最大匹配长度的空间。
 export const LZSS_WINDOW_SIZE = 4096
 export const LZSS_MAX_MATCH = 18

@@ -3,8 +3,7 @@ import type { PakEntry } from '../pak'
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
-import { decompressLzss } from '../lzss'
-import { flattenPakEntries, verifyPak } from '../pak'
+import { flattenPakEntries, readPakEntryData, verifyPak } from '../pak'
 import { success } from './output'
 
 export interface UnpackOptions {
@@ -105,7 +104,7 @@ function preflightExtraction(
       files.push({
         entry,
         target,
-        data: decompressLzss(entry.packedData, entry.unpackedSize),
+        data: readPakEntryData(entry),
       })
   }
 

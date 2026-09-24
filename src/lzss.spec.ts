@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer'
 import { describe, expect, it } from 'vitest'
-import { compressLzss, decompressLzss } from './lzss'
+import { compressLzss, decompressLzss, detectLzssProfile } from './lzss'
 
 function roundtrip(input: Buffer): Buffer {
   const compressed = compressLzss(input)
@@ -44,5 +44,19 @@ describe('lZSS', () => {
       'trailing',
     )
     expect(() => decompressLzss(Buffer.from([0, 0, 0]), 1)).toThrow('exceeds')
+  })
+
+  it('reproduces both known encoder profiles', () => {
+    const input = Buffer.from('                  ABCABCABCABCABCABC')
+    const asktao = compressLzss(input, 'asktao-17')
+    const okumura = compressLzss(input, 'okumura-18')
+
+    expect(asktao.toString('hex')).toBe('0eddff414243000c')
+    expect(okumura.toString('hex')).toBe('0edcff414243000c')
+    expect(decompressLzss(asktao, input.length)).toEqual(input)
+    expect(decompressLzss(okumura, input.length)).toEqual(input)
+    expect(detectLzssProfile(input, asktao)).toBe('asktao-17')
+    expect(detectLzssProfile(input, okumura)).toBe('okumura-18')
+    expect(detectLzssProfile(input, Buffer.from([0]))).toBeUndefined()
   })
 })

@@ -1,13 +1,36 @@
 import type { Buffer } from 'node:buffer'
-import { decompressLzss } from './lzss'
-import { flattenPakEntries, parsePak } from './pak'
+import type { PakEntry } from './pak'
+import { flattenPakEntries, parsePak, readPakEntryData } from './pak'
 
 export interface PakComparisonResult {
   logicalMatch: boolean
+  structuralMatch: boolean
   binaryIdentical: boolean
   matchedFiles: number
   totalFiles: number
   differences: string[]
+}
+
+function entriesByPath(entries: readonly PakEntry[]): {
+  entries: Map<string, PakEntry>
+  duplicate: boolean
+} {
+  const result = new Map<string, PakEntry>()
+  let duplicate = false
+  for (const entry of entries) {
+    if (result.has(entry.path)) duplicate = true
+    result.set(entry.path, entry)
+  }
+  return { entries: result, duplicate }
+}
+
+function sameKeys(
+  left: ReadonlyMap<string, unknown>,
+  right: ReadonlyMap<string, unknown>,
+): boolean {
+  return (
+    left.size === right.size && [...left.keys()].every((key) => right.has(key))
+  )
 }
 
 export function comparePaks(
@@ -19,48 +42,80 @@ export function comparePaks(
   const differences = new Set<string>()
   if (!original.header.raw.equals(generated.header.raw))
     differences.add('header differs')
+
   const originalEntries = flattenPakEntries(original.entries)
   const generatedEntries = flattenPakEntries(generated.entries)
   if (originalEntries.length !== generatedEntries.length)
     differences.add('entry count differs')
-  let matchedFiles = 0
-  let structureMatches = originalEntries.length === generatedEntries.length
-  // 逻辑一致要求目录结构、条目顺序、完整路径和文件内容一致；压缩字节可以不同。
+
+  let orderMatches = originalEntries.length === generatedEntries.length
+  let metadataMatches = orderMatches
+  let offsetMatches = orderMatches
+  let sizeMatches = orderMatches
   const totalEntries = Math.max(originalEntries.length, generatedEntries.length)
-  const totalFiles = Math.max(original.files.length, generated.files.length)
   for (let index = 0; index < totalEntries; index++) {
     const left = originalEntries[index]
     const right = generatedEntries[index]
     if (!left || !right) continue
-    if (left.path !== right.path || left.type !== right.type) {
-      differences.add('entry order or filename differs')
-      structureMatches = false
-    }
-    if (left.dataOffset !== right.dataOffset) differences.add('offset differs')
+    if (left.path !== right.path || left.type !== right.type)
+      orderMatches = false
     if (left.field00 !== right.field00 || left.field10 !== right.field10)
-      differences.add('entry metadata differs')
-    if (left.type === 'file' && right.type === 'file') {
-      if (!left.packedData.equals(right.packedData))
-        differences.add('compressed stream differs')
-      const leftData = decompressLzss(left.packedData, left.unpackedSize)
-      const rightData = decompressLzss(right.packedData, right.unpackedSize)
-      if (left.path === right.path && leftData.equals(rightData)) matchedFiles++
-      else differences.add('unpacked content differs')
-    }
+      metadataMatches = false
+    if (left.dataOffset !== right.dataOffset) offsetMatches = false
+    if (
+      left.packedSize !== right.packedSize ||
+      left.unpackedSize !== right.unpackedSize
+    )
+      sizeMatches = false
   }
+  if (!orderMatches) differences.add('entry order differs')
+  if (!metadataMatches) differences.add('entry metadata differs')
+  if (!offsetMatches) differences.add('offset differs')
+  if (!sizeMatches) differences.add('entry size differs')
+
+  const originalDirectories = entriesByPath(original.directories)
+  const generatedDirectories = entriesByPath(generated.directories)
+  const directoryPathsMatch =
+    !originalDirectories.duplicate &&
+    !generatedDirectories.duplicate &&
+    sameKeys(originalDirectories.entries, generatedDirectories.entries)
+  if (!directoryPathsMatch) differences.add('directory paths differ')
+
+  const originalFiles = entriesByPath(original.files)
+  const generatedFiles = entriesByPath(generated.files)
+  const filePathsMatch =
+    !originalFiles.duplicate &&
+    !generatedFiles.duplicate &&
+    sameKeys(originalFiles.entries, generatedFiles.entries)
+  if (!filePathsMatch) differences.add('file paths differ')
+
+  let matchedFiles = 0
+  for (const [entryPath, left] of originalFiles.entries) {
+    const right = generatedFiles.entries.get(entryPath)
+    if (!right) continue
+    if (!left.packedData.equals(right.packedData))
+      differences.add('compressed stream differs')
+    if (readPakEntryData(left).equals(readPakEntryData(right))) matchedFiles++
+    else differences.add('unpacked content differs')
+  }
+
   const originalGaps = gaps(original)
   const generatedGaps = gaps(generated)
-  // 单独比较相邻数据块间距，区分 padding 差异和压缩算法导致的 offset 差异。
   if (
     originalGaps.length !== generatedGaps.length ||
     originalGaps.some((gap, index) => gap !== generatedGaps[index])
   )
     differences.add('padding differs')
+
+  const totalFiles = Math.max(original.files.length, generated.files.length)
   return {
     logicalMatch:
+      directoryPathsMatch &&
+      filePathsMatch &&
       matchedFiles === totalFiles &&
-      original.files.length === generated.files.length &&
-      structureMatches,
+      original.files.length === generated.files.length,
+    structuralMatch:
+      orderMatches && metadataMatches && offsetMatches && sizeMatches,
     binaryIdentical: originalBuffer.equals(generatedBuffer),
     matchedFiles,
     totalFiles,

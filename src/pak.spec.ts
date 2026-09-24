@@ -4,12 +4,14 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { comparePaks } from './compare'
-import { compressLzss, decompressLzss } from './lzss'
+import { ENTRY_FLAG_STORED, HEADER_SIZE } from './constants'
+import { compressLzss, decompressLzss, detectLzssProfile } from './lzss'
 import {
   buildPak,
   comparePakFilenames,
   encodeFilename,
   parsePak,
+  readPakEntryData,
   verifyPak,
 } from './pak'
 
@@ -74,7 +76,20 @@ describe('pak', () => {
       buildPak({ entries: [{ name: 'a.txt', data: Buffer.from('a') }] }),
     )
     expect(defaults.header).toMatchObject({ field08: 0, field0c: 0 })
-    expect(defaults.entries[0]).toMatchObject({ field00: 0, field10: 0 })
+    expect(defaults.entries[0]).toMatchObject({
+      field00: ENTRY_FLAG_STORED,
+      field10: 0,
+      stored: true,
+    })
+    const compressedDefault = parsePak(
+      buildPak({
+        entries: [{ name: 'repeat.bin', data: Buffer.alloc(128, 0x41) }],
+      }),
+    )
+    expect(compressedDefault.entries[0]).toMatchObject({
+      field00: 0,
+      stored: false,
+    })
 
     const custom = parsePak(
       buildPak({
@@ -238,4 +253,125 @@ describe('pak', () => {
       }),
     ).toThrow('must be 44 bytes')
   })
+
+  it('supports stored, empty stored, and explicitly compressed files', () => {
+    const raw = Buffer.from(Array.from({ length: 64 }, (_, index) => index))
+    const buffer = buildPak({
+      entries: [
+        { name: 'raw.bin', data: raw, stored: true },
+        { name: 'empty.bin', data: Buffer.alloc(0), stored: true },
+        {
+          name: 'compressed.txt',
+          data: Buffer.alloc(128, 0x41),
+          stored: false,
+        },
+      ],
+    })
+    const archive = parsePak(buffer)
+
+    expect(verifyPak(buffer).valid).toBe(true)
+    expect(archive.files.map((entry) => entry.stored)).toEqual([
+      true,
+      true,
+      false,
+    ])
+    expect(archive.files[0]!.field00).toBe(ENTRY_FLAG_STORED)
+    expect(archive.files[0]!.packedSize).toBe(raw.length)
+    expect(readPakEntryData(archive.files[0]!)).toEqual(raw)
+    expect(readPakEntryData(archive.files[1]!)).toEqual(Buffer.alloc(0))
+    expect(readPakEntryData(archive.files[2]!)).toEqual(Buffer.alloc(128, 0x41))
+
+    const malformed = Buffer.from(buffer)
+    malformed.writeUInt32LE(raw.length + 1, HEADER_SIZE + 12)
+    const verification = verifyPak(malformed)
+    expect(verification.valid).toBe(false)
+    expect(verification.issues[0]).toMatchObject({
+      field00: ENTRY_FLAG_STORED,
+      error: 'Stored entry has different packed/unpacked size: raw.bin',
+    })
+  })
+
+  it('rejects a stored directory bitfield', () => {
+    const buffer = buildPak({ entries: [{ name: 'dir', children: [] }] })
+    buffer.writeUInt32LE(ENTRY_FLAG_STORED + 1, HEADER_SIZE)
+    expect(verifyPak(buffer).issues[0]!.error).toContain(
+      'cannot be a stored directory',
+    )
+
+    const unsupported = Buffer.from(buffer)
+    unsupported.writeUInt32LE(2, HEADER_SIZE)
+    expect(verifyPak(unsupported).issues[0]!.error).toContain(
+      'unsupported field00',
+    )
+  })
+
+  it('compares logical contents by path instead of entry order', () => {
+    const first = buildPak({
+      entries: [
+        { name: 'foo', data: Buffer.from('foo'), stored: true },
+        { name: 'bar', data: Buffer.from('bar'), stored: true },
+      ],
+    })
+    const reordered = buildPak({
+      entries: [
+        { name: 'bar', data: Buffer.from('bar'), stored: true },
+        { name: 'foo', data: Buffer.from('foo'), stored: true },
+      ],
+    })
+    const changed = buildPak({
+      entries: [
+        { name: 'foo', data: Buffer.from('changed'), stored: true },
+        { name: 'bar', data: Buffer.from('bar'), stored: true },
+      ],
+    })
+
+    expect(comparePaks(first, reordered)).toMatchObject({
+      logicalMatch: true,
+      structuralMatch: false,
+      binaryIdentical: false,
+      matchedFiles: 2,
+      totalFiles: 2,
+    })
+    const changedResult = comparePaks(first, changed)
+    expect(changedResult).toMatchObject({
+      logicalMatch: false,
+      matchedFiles: 1,
+      totalFiles: 2,
+    })
+    expect(changedResult.differences).toContain('unpacked content differs')
+  })
+
+  it('recognizes stored entries and both profiles in the real aaa samples', () => {
+    const etcBuffer = fs.readFileSync(
+      path.resolve(import.meta.dirname, '../sample/real-etc/aaa/etc.pak'),
+    )
+    const verification = verifyPak(etcBuffer)
+    expect(verification.valid).toBe(true)
+    const stored = verification.archive!.files.filter((entry) => entry.stored)
+    expect(
+      stored.map((entry) => [entry.name, entry.packedSize, entry.unpackedSize]),
+    ).toEqual([
+      ['file_dependence.list', 0, 0],
+      ['hanzi_table.list', 938, 938],
+    ])
+    expect(readPakEntryData(stored[1]!)).toEqual(stored[1]!.packedData)
+
+    const library = parsePak(
+      fs.readFileSync(
+        path.resolve(
+          import.meta.dirname,
+          '../sample/real-etc/aaa/lib_aaa32.pak',
+        ),
+      ),
+    )
+    for (const entryPath of [
+      'aaa/daemons/express_recharged.o',
+      'aaa/start_aaa.o',
+    ]) {
+      const entry = library.files.find((item) => item.path === entryPath)!
+      expect(detectLzssProfile(readPakEntryData(entry), entry.packedData)).toBe(
+        'okumura-18',
+      )
+    }
+  }, 20_000)
 })

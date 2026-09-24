@@ -1,6 +1,11 @@
+import type { LzssProfile } from './lzss'
 import { Buffer } from 'node:buffer'
 import iconv from 'iconv-lite'
 import {
+  ENTRY_FLAG_STORED,
+  ENTRY_KIND_DIRECTORY,
+  ENTRY_KIND_FILE,
+  ENTRY_KIND_MASK,
   ENTRY_SIZE,
   FILENAME_ENCODING,
   FILENAME_OFFSET,
@@ -18,12 +23,14 @@ export interface PakHeader {
   raw: Buffer
 }
 
-// 每个索引项固定为 64 字节。field00 已确认 0 表示文件、1 表示目录索引；
-// field10 的真实语义仍未确认，因此 reference 重建时继续保留其原值。
+// 每个索引项固定为 64 字节。field00 是条目种类和存储 flag 组成的 bitfield；
+// field10 在多个真实样本中表现为 Unix timestamp，但语义尚未完全确认，
+// 因此 reference 重建时必须继续保留原值。
 export interface PakEntry {
   index: number
   entryOffset: number
   type: 'file' | 'directory'
+  stored: boolean
   path: string
   depth: number
   field00: number
@@ -52,6 +59,8 @@ export interface PakBuildEntry {
   children?: readonly PakBuildEntry[]
   field00?: number
   field10?: number
+  stored?: boolean
+  lzssProfile?: LzssProfile
   packedData?: Buffer
   filenameField?: Buffer
 }
@@ -66,6 +75,7 @@ export interface VerificationIssue {
   offset?: number
   packedSize?: number
   unpackedSize?: number
+  field00?: number
   error: string
 }
 export interface PakVerificationResult {
@@ -151,6 +161,27 @@ export function comparePakFilenames(left: string, right: string): number {
   return primary === 0 ? Buffer.compare(leftRaw, rightRaw) : primary
 }
 
+function decodeEntryKind(
+  field00: number,
+  index: number,
+  entryPath: string,
+): { type: 'file' | 'directory'; stored: boolean } {
+  const stored = field00 >>> 31 === 1
+  const kind = field00 & ENTRY_KIND_MASK
+  if (kind !== ENTRY_KIND_FILE && kind !== ENTRY_KIND_DIRECTORY)
+    throw new Error(
+      `Entry #${index} (${entryPath}) has unsupported field00=0x${field00.toString(16).padStart(8, '0')}`,
+    )
+  if (kind === ENTRY_KIND_DIRECTORY && stored)
+    throw new Error(
+      `Entry #${index} (${entryPath}) cannot be a stored directory (field00=0x${field00.toString(16).padStart(8, '0')})`,
+    )
+  return {
+    type: kind === ENTRY_KIND_DIRECTORY ? 'directory' : 'file',
+    stored,
+  }
+}
+
 /** 从完整 PAK Buffer 解析头部、索引和各条目的压缩数据切片。 */
 export function parsePak(buffer: Buffer): PakArchive {
   if (buffer.length < HEADER_SIZE)
@@ -224,6 +255,14 @@ export function parsePak(buffer: Buffer): PakArchive {
       const packedSize = raw.readUInt32LE(8)
       const unpackedSize = raw.readUInt32LE(12)
       const currentIndex = decodedIndex++
+      const decoded = decodeFilename(
+        raw.subarray(FILENAME_OFFSET),
+        currentIndex,
+      )
+      const entryPath = parentPath
+        ? `${parentPath}/${decoded.name}`
+        : decoded.name
+      const entryKind = decodeEntryKind(field00, currentIndex, entryPath)
       const dataEnd = checkedEnd(
         dataOffset,
         packedSize,
@@ -234,17 +273,11 @@ export function parsePak(buffer: Buffer): PakArchive {
         throw new Error(
           `Entry #${currentIndex} has an invalid data offset: ${dataOffset}`,
         )
-      const decoded = decodeFilename(
-        raw.subarray(FILENAME_OFFSET),
-        currentIndex,
-      )
-      const entryPath = parentPath
-        ? `${parentPath}/${decoded.name}`
-        : decoded.name
       const entry: PakEntry = {
         index: currentIndex,
         entryOffset,
-        type: field00 === 1 ? 'directory' : 'file',
+        type: entryKind.type,
+        stored: entryKind.stored,
         path: entryPath,
         depth,
         field00,
@@ -257,7 +290,7 @@ export function parsePak(buffer: Buffer): PakArchive {
         raw,
         packedData: Buffer.from(buffer.subarray(dataOffset, dataEnd)),
       }
-      if (field00 === 1) {
+      if (entry.type === 'directory') {
         if (packedSize !== unpackedSize || packedSize % ENTRY_SIZE !== 0)
           throw new Error(
             `Directory entry #${currentIndex} has an invalid index size`,
@@ -291,6 +324,20 @@ export function parsePak(buffer: Buffer): PakArchive {
   }
 }
 
+/** 读取文件条目的逻辑内容，统一处理 raw/store 与 LZSS payload。 */
+export function readPakEntryData(entry: PakEntry): Buffer {
+  if (entry.type !== 'file')
+    throw new Error(`Cannot read directory entry as file: ${entry.path}`)
+  if (entry.stored) {
+    if (entry.packedSize !== entry.unpackedSize)
+      throw new Error(
+        `Stored entry has different packed/unpacked size: ${entry.path}`,
+      )
+    return Buffer.from(entry.packedData)
+  }
+  return decompressLzss(entry.packedData, entry.unpackedSize)
+}
+
 /** 验证结构、文件名、数据区间以及每个 LZSS 流能否完整解压。 */
 export function verifyPak(buffer: Buffer): PakVerificationResult {
   let archive: PakArchive
@@ -314,20 +361,14 @@ export function verifyPak(buffer: Buffer): PakVerificationResult {
       offset: entry.dataOffset,
       packedSize: entry.packedSize,
       unpackedSize: entry.unpackedSize,
+      field00: entry.field00,
     }
     if (names.has(entry.path))
       issues.push({ ...context, error: 'Duplicate filename' })
     names.add(entry.path)
-    if (entry.field00 !== 0 && entry.field00 !== 1) {
-      issues.push({
-        ...context,
-        error: `Unsupported entry type: ${entry.field00}`,
-      })
-      continue
-    }
     if (entry.type === 'file') {
       try {
-        decompressLzss(entry.packedData, entry.unpackedSize)
+        readPakEntryData(entry)
       } catch (error) {
         issues.push({
           ...context,
@@ -372,7 +413,8 @@ export function buildPak(input: PakBuildInput): Buffer {
   interface PreparedEntry {
     source: PakBuildEntry
     type: 'file' | 'directory'
-    compressed?: Buffer
+    stored: boolean
+    payload?: Buffer
     children?: PreparedEntry[]
   }
 
@@ -383,35 +425,69 @@ export function buildPak(input: PakBuildInput): Buffer {
     if (isDirectory) {
       if (entry.data !== undefined || entry.packedData !== undefined)
         throw new Error(`Directory entry #${index} must not contain file data`)
-      if (entry.field00 !== undefined && entry.field00 !== 1)
+      if (entry.stored)
+        throw new Error(`Directory entry #${index} cannot be stored`)
+      if (entry.field00 !== undefined && entry.field00 !== ENTRY_KIND_DIRECTORY)
         throw new Error(`Directory entry #${index} must use field00=1`)
       return {
         source: entry,
         type: 'directory',
+        stored: false,
         children: entry.children!.map(prepare),
       }
     }
-    if (!entry.data) throw new Error(`File entry #${index} is missing data`)
-    if (entry.field00 !== undefined && entry.field00 !== 0)
-      throw new Error(`File entry #${index} must use field00=0`)
-    let compressed: Buffer
-    if (!entry.packedData) compressed = compressLzss(entry.data)
-    else {
-      let unpacked: Buffer
-      try {
-        unpacked = decompressLzss(entry.packedData, entry.data.length)
-      } catch (error) {
+    if (entry.data === undefined)
+      throw new Error(`File entry #${index} is missing data`)
+
+    let requestedStored = entry.stored
+    if (entry.field00 !== undefined) {
+      const decoded = decodeEntryKind(entry.field00, index, entry.name)
+      if (decoded.type !== 'file')
+        throw new Error(`File entry #${index} must use a file field00`)
+      if (requestedStored !== undefined && requestedStored !== decoded.stored)
         throw new Error(
-          `Entry #${index} has invalid precompressed data: ${error instanceof Error ? error.message : String(error)}`,
+          `File entry #${index} has conflicting stored and field00 values`,
         )
-      }
-      if (!unpacked.equals(entry.data))
-        throw new Error(
-          `Entry #${index} precompressed data does not match its contents`,
-        )
-      compressed = Buffer.from(entry.packedData)
+      requestedStored = decoded.stored
     }
-    return { source: entry, type: 'file', compressed }
+    // packedData 既有 API 表示预压缩流；没有显式模式时继续按 compressed 解释。
+    if (entry.packedData !== undefined && requestedStored === undefined)
+      requestedStored = false
+
+    let compressed: Buffer | undefined
+    if (
+      entry.packedData === undefined &&
+      (requestedStored === undefined || requestedStored === false)
+    )
+      compressed = compressLzss(entry.data, entry.lzssProfile)
+    const stored = requestedStored ?? compressed!.length >= entry.data.length
+    if (stored && entry.lzssProfile !== undefined)
+      throw new Error(`Stored entry #${index} must not specify an LZSS profile`)
+
+    let payload: Buffer
+    if (entry.packedData !== undefined) {
+      if (stored) {
+        if (!entry.packedData.equals(entry.data))
+          throw new Error(
+            `Entry #${index} stored payload does not match its contents`,
+          )
+      } else {
+        let unpacked: Buffer
+        try {
+          unpacked = decompressLzss(entry.packedData, entry.data.length)
+        } catch (error) {
+          throw new Error(
+            `Entry #${index} has invalid precompressed data: ${error instanceof Error ? error.message : String(error)}`,
+          )
+        }
+        if (!unpacked.equals(entry.data))
+          throw new Error(
+            `Entry #${index} precompressed data does not match its contents`,
+          )
+      }
+      payload = Buffer.from(entry.packedData)
+    } else payload = stored ? Buffer.from(entry.data) : compressed!
+    return { source: entry, type: 'file', stored, payload }
   }
 
   const prepared = input.entries.map(prepare)
@@ -423,7 +499,7 @@ export function buildPak(input: PakBuildInput): Buffer {
         sum +
         (entry.type === 'directory'
           ? serializedSize(entry.children!)
-          : entry.compressed!.length),
+          : entry.payload!.length),
       0,
     )
   const totalSize = HEADER_SIZE + serializedSize(prepared)
@@ -447,9 +523,14 @@ export function buildPak(input: PakBuildInput): Buffer {
       const isDirectory = preparedEntry.type === 'directory'
       const packedSize = isDirectory
         ? preparedEntry.children!.length * ENTRY_SIZE
-        : preparedEntry.compressed!.length
+        : preparedEntry.payload!.length
       const unpackedSize = isDirectory ? packedSize : entry.data!.length
-      writeUint32(raw, isDirectory ? 1 : 0, 0, `Entry #${index} field00`)
+      const field00 = isDirectory
+        ? ENTRY_KIND_DIRECTORY
+        : preparedEntry.stored
+          ? ENTRY_FLAG_STORED + ENTRY_KIND_FILE
+          : ENTRY_KIND_FILE
+      writeUint32(raw, field00, 0, `Entry #${index} field00`)
       writeUint32(raw, dataOffset, 4, `Entry #${index} dataOffset`)
       writeUint32(raw, packedSize, 8, `Entry #${index} packedSize`)
       writeUint32(raw, unpackedSize, 12, `Entry #${index} unpackedSize`)
@@ -474,8 +555,8 @@ export function buildPak(input: PakBuildInput): Buffer {
       if (isDirectory)
         dataOffset = writeBlock(preparedEntry.children!, dataOffset)
       else {
-        preparedEntry.compressed!.copy(output, dataOffset)
-        dataOffset += preparedEntry.compressed!.length
+        preparedEntry.payload!.copy(output, dataOffset)
+        dataOffset += preparedEntry.payload!.length
       }
     })
     return dataOffset

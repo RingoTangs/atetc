@@ -2,12 +2,13 @@ import type { PakBuildEntry, PakEntry } from '../pak'
 import fs from 'node:fs'
 import path from 'node:path'
 import { FILENAME_OFFSET } from '../constants'
-import { decompressLzss } from '../lzss'
+import { detectLzssProfile } from '../lzss'
 import {
   buildPak,
   comparePakFilenames,
   encodeFilename,
   flattenPakEntries,
+  readPakEntryData,
   verifyPak,
 } from '../pak'
 import { success, warning } from './output'
@@ -31,6 +32,7 @@ interface ReferenceBuildStats {
   recompressedFiles: number
   missingEntries: number
   addedEntries: number
+  unknownProfiles: number
 }
 
 function defaultPackOutput(directory: string): string {
@@ -146,17 +148,22 @@ function buildReferencedFile(
   name = reference.name,
 ): PakBuildEntry {
   const data = fs.readFileSync(scanned.filename)
-  const referenceData = decompressLzss(
-    reference.packedData,
-    reference.unpackedSize,
-  )
+  const referenceData = readPakEntryData(reference)
   const unchanged = data.equals(referenceData)
   if (unchanged) stats.reusedFiles++
   else stats.recompressedFiles++
+  const lzssProfile =
+    !unchanged && !reference.stored
+      ? detectLzssProfile(referenceData, reference.packedData)
+      : undefined
+  if (!unchanged && !reference.stored && lzssProfile === undefined)
+    stats.unknownProfiles++
   return {
     name,
     data,
     ...referenceFields(reference),
+    stored: reference.stored,
+    lzssProfile,
     packedData: unchanged ? reference.packedData : undefined,
   }
 }
@@ -268,6 +275,7 @@ export function packDirectory(directory: string, options: PackOptions): void {
       recompressedFiles: 0,
       missingEntries: 0,
       addedEntries: 0,
+      unknownProfiles: 0,
     }
     entries =
       reference.directories.length === 0
@@ -287,6 +295,10 @@ export function packDirectory(directory: string, options: PackOptions): void {
     if (stats.addedEntries > 0)
       console.warn(
         `${warning('Warning:')} ${stats.addedEntries} new entry/entries will be appended with zero unknown fields`,
+      )
+    if (stats.unknownProfiles > 0)
+      console.warn(
+        `${warning('Warning:')} ${stats.unknownProfiles} modified reference file(s) use an unknown LZSS profile; falling back to asktao-17`,
       )
   } else {
     entries = scanned.map(toBuildEntry)
