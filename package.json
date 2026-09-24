@@ -32,7 +32,7 @@
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
   "bin": {
-    "atetc": "./dist/cli.mjs"
+    "atetc": "dist/cli.mjs"
   },
   "files": [
     "dist"
