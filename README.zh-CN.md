@@ -2,7 +2,7 @@
 
 `atetc` 是用于分析、验证、解包和重新封装特定游戏 `etc.pak` 的 Node.js CLI 与 TypeScript 库。
 
-该格式使用 16 字节小端 Header、64 字节 Index Entry、GB18030 文件名以及 4096 字节窗口的经典 LZSS 压缩。同时支持 `etc.pak` 这类单层归档，以及 `lib_gs32.pak` 这类递归目录归档。
+该格式使用 16 字节小端 Header、64 字节 Index Entry、GB18030 文件名，以及 raw/store 或 4096 字节窗口的经典 LZSS 压缩。同时支持 `etc.pak` 这类单层归档，以及 `lib_gs32.pak` 这类递归目录归档。
 
 ## 环境要求
 
@@ -47,7 +47,7 @@ atetc cmp etc.pak rebuilt.pak
 
 `unpack` 只输出归档内的实际文件，同时还原目录 Entry 和空目录。它允许安全合并到已有目录，但会在写入前检查全部目标；已有文件、类型冲突或符号链接都会使操作整体失败。`pack` 会递归扫描输入目录、生成真实目录 Entry，并复现游戏使用的大小写不敏感文件名顺序，其中下划线排在字母之后。使用 `--reference` 可以从原始 PAK 保留目录树、匹配条目的顺序和元数据；未修改文件还会复用原压缩流，使未修改归档能够逐字节重建。除非明确传入 `--force`，否则不会覆盖已有 PAK。
 
-新增或修改的文件使用兼容原游戏工具的 Okumura 二叉树 LZSS 变体，可逐字节复现当前全部真实样本。
+PAK 的 LZSS 解压格式一致，但不同资源包可能使用兼容的 `asktao-17` 或 `okumura-18` 编码 profile。使用 `--reference` 时，atetc 会尽可能检测并保留原 profile；未修改文件优先复用原压缩流，修改后的 stored/raw reference 文件仍保持 raw 存储。
 
 ## 库 API
 
@@ -56,7 +56,9 @@ import {
   buildPak,
   compressLzss,
   decompressLzss,
+  detectLzssProfile,
   parsePak,
+  readPakEntryData,
   verifyPak,
 } from 'atetc'
 ```

@@ -2,7 +2,7 @@
 
 `atetc` is a Node.js CLI and TypeScript library for inspecting, validating, unpacking, and rebuilding the game's `etc.pak` archive format.
 
-The format uses a 16-byte little-endian header, 64-byte index entries, GB18030 filenames, and classic 4096-byte-window LZSS compression. Both flat archives such as `etc.pak` and recursive directory archives such as `lib_gs32.pak` are supported.
+The format uses a 16-byte little-endian header, 64-byte index entries, GB18030 filenames, and either raw storage or classic 4096-byte-window LZSS compression. Both flat archives such as `etc.pak` and recursive directory archives such as `lib_gs32.pak` are supported.
 
 ## Requirements
 
@@ -47,7 +47,7 @@ atetc cmp etc.pak rebuilt.pak
 
 `unpack` writes only the files stored in the archive and recreates directory entries, including empty directories. It may merge into an existing directory after checking every destination; existing files, type conflicts, and symbolic links cause the operation to fail before writing. `pack` recursively scans its input directory, emits real directory entries, and reproduces the game's case-insensitive filename order, where underscores sort after letters. Pass `--reference` to preserve the directory tree, matching entry order, and metadata; unchanged files also reuse their original compressed streams, allowing an unchanged archive to be rebuilt byte-for-byte. Existing PAK output is never overwritten unless `--force` is supplied.
 
-New and modified files use a game-compatible Okumura binary-tree LZSS variant that reproduces every current real-world sample byte-for-byte.
+PAK files share the same LZSS decoding format, but different archives may use the compatible `asktao-17` or `okumura-18` encoder profile. With `--reference`, atetc detects and preserves the original profile when possible; unchanged files preferentially reuse their original compressed streams. Stored/raw reference files remain stored when modified.
 
 ## Library
 
@@ -56,7 +56,9 @@ import {
   buildPak,
   compressLzss,
   decompressLzss,
+  detectLzssProfile,
   parsePak,
+  readPakEntryData,
   verifyPak,
 } from 'atetc'
 ```
