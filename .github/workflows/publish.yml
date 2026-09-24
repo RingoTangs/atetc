@@ -70,9 +70,6 @@ jobs:
             NPM_TAG="latest"
           fi
 
-          PACKAGE_NAME="$(node -p "require('./package.json').name")"
-
-          echo "package_name=$PACKAGE_NAME" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
 
@@ -88,19 +85,9 @@ jobs:
       - name: Install OIDC-compatible npm
         run: npm install --global "npm@>=11.5.1 <12"
 
-      - name: Check npm registry
-        id: registry
-        env:
-          PACKAGE_NAME: ${{ steps.metadata.outputs.package_name }}
-          VERSION: ${{ steps.metadata.outputs.version }}
-        run: |
-          if npm view "$PACKAGE_NAME@$VERSION" version --prefer-online >/dev/null 2>&1; then
-            echo "published=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "published=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Publish package
-        if: steps.registry.outputs.published != 'true'
         # 检查、构建和打包预览已经在前序步骤完成，避免再次触发 prepublishOnly。
         run: npm publish --ignore-scripts --access public --tag "${{ steps.metadata.outputs.npm_tag }}"
+        # 首次创建 npm 包时使用此 secret；配置 Trusted Publisher 后删除这一行。
+        # env:
+        #   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
