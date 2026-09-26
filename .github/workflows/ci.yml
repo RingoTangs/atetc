@@ -1,0 +1,86 @@
+# GitHub Actions 工作流名称
+name: CI
+
+# 定义工作流的触发条件
+on:
+  # 允许在 GitHub Actions 页面手动触发
+  workflow_dispatch:
+
+  # 推送到 main 分支时触发
+  push:
+    branches:
+      - main
+
+  # 创建或更新目标分支为 main 的 Pull Request 时触发
+  pull_request:
+    branches:
+      - main
+
+# 限制 GitHub Actions 默认权限
+# 当前 CI 只需要读取仓库内容
+permissions:
+  contents: read
+
+# 控制并发执行
+concurrency:
+  # 同一个 workflow + 同一个 ref（分支 / PR / Tag）归到同一并发组
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+  # 当同一组有新的 CI 开始时，取消正在运行的旧 CI
+  # 适合 CI 场景，避免旧提交继续占用 Runner
+  cancel-in-progress: true
+
+jobs:
+  # 定义一个名为 check 的 Job
+  check:
+    name: Check
+    # 使用 GitHub 提供的最新版 Ubuntu Runner
+    runs-on: ubuntu-latest
+
+    # 最长运行 10 分钟，避免异常任务长时间占用 Runner
+    timeout-minutes: 10
+
+    steps:
+      # 拉取当前仓库代码
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # 安装并配置 pnpm
+      # 如果 package.json 中声明了 packageManager，
+      # pnpm/action-setup 会使用对应的 pnpm 版本
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      # 安装指定版本的 Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          # 固定 Node.js 版本，保证本地和 CI 环境尽量一致
+          node-version: 22.23.2
+
+          # 启用 pnpm 依赖缓存，加快后续 CI 的依赖安装速度
+          cache: pnpm
+
+          # 指定用于计算缓存 key 的 lockfile
+          cache-dependency-path: pnpm-lock.yaml
+
+      # 根据 pnpm-lock.yaml 安装依赖
+      # --frozen-lockfile 表示不允许 CI 自动修改 lockfile
+      # 如果 package.json 与 lockfile 不一致，直接失败
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 执行项目代码检查
+      # 具体内容取决于 package.json 中的 scripts.check
+      # 通常可能包含 lint、typecheck、format check 等
+      - name: Check
+        run: pnpm check
+
+      # 构建项目
+      - name: Build
+        run: pnpm build
+
+      # 检查最终 npm package 的内容是否符合预期
+      # 具体行为取决于 package.json 中的 scripts["pack:check"]
+      - name: Check package
+        run: pnpm pack:check

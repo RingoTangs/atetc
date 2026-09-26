@@ -1,93 +1,167 @@
+# npm 发布工作流
 name: Publish to npm
 
+# 当推送 v 开头的 Git Tag 时触发
+#
+# 例如：
+#   v0.1.0
+#   v0.2.0-alpha.1
+#   v1.0.0-rc.1
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
 
+# GitHub Actions 权限
 permissions:
+  # Checkout 仓库代码只需要读取权限
   contents: read
+
+  # npm Trusted Publishing / OIDC 所需要的权限
+  # 不需要在 GitHub Secrets 中保存长期 NPM_TOKEN
   id-token: write
 
 jobs:
   publish:
-    name: Publish package
+    name: Publish
+    # 模板仓库本身禁止发布
+    # 从 GitHub Template 创建新项目后，
+    # github.repository 会变成新仓库名称，
+    # 因此发布工作流会自动启用，无需修改此文件。
+    if: github.repository != 'RingoTangs/tsdown-template'
+
     runs-on: ubuntu-latest
-    environment: npm-publish
+
+    # 防止异常情况下发布任务长时间占用 Runner
+    timeout-minutes: 15
 
     steps:
-      - name: Check out release tag
-        uses: actions/checkout@v6
+      # 拉取当前 Tag 对应的仓库代码
+      - name: Checkout repository
+        uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.release.tag_name }}
+          # 发布过程中不需要继续使用 GitHub checkout credential，
+          # 因此关闭凭据持久化，减少不必要的权限暴露
+          persist-credentials: false
 
+      # 安装 pnpm
+      #
+      # pnpm 版本可以从 package.json 的 packageManager 字段读取，例如：
+      #
+      # "packageManager": "pnpm@10.24.0"
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      # 安装 Node.js 并配置 npm registry
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
+          # 固定 Node.js 版本，保证 CI / Release 环境可预测
           node-version: 22.23.2
-          registry-url: https://registry.npmjs.org
+
+          # npm 官方 Registry
+          registry-url: https://registry.npmjs.org/
+
+          # 发布工作流不使用 package manager cache
+          # 减少 release 环境受到缓存内容影响的可能性
           package-manager-cache: false
 
-      - name: Enable Corepack
-        run: corepack enable
+      # npm Trusted Publishing 需要较新的 npm 版本
+      #
+      # Node.js 自带的 npm 版本不一定满足要求，
+      # 因此显式升级到当前 npm 11
+      - name: Update npm
+        run: npm install --global npm@11
 
+      # 根据 pnpm-lock.yaml 安装依赖
+      #
+      # --frozen-lockfile:
+      # 如果 package.json 和 pnpm-lock.yaml 不一致则直接失败，
+      # CI 不允许自动修改 lockfile
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Validate release metadata
-        id: metadata
+      # 检查 Git Tag 与 package.json 中的版本是否一致
+      #
+      # 示例：
+      #
+      # package.json:
+      #   "version": "0.1.0"
+      #
+      # Git Tag:
+      #   v0.1.0
+      #
+      # 才允许继续发布
+      - name: Verify release version
         shell: bash
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
         run: |
-          VERSION="$(node -p "require('./package.json').version")"
-          EXPECTED_TAG="v${VERSION}"
+          VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
 
-          if [[ "$RELEASE_TAG" != "$EXPECTED_TAG" ]]; then
-            echo "Release tag $RELEASE_TAG does not match package version $EXPECTED_TAG" >&2
+          echo "package.json version: $VERSION"
+          echo "Git tag version:      $TAG_VERSION"
+
+          if [ "$VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Git tag v$TAG_VERSION does not match package.json version $VERSION"
             exit 1
           fi
 
-          if [[ "$VERSION" == *-* ]]; then
-            if [[ "$RELEASE_PRERELEASE" != "true" ]]; then
-              echo "Prerelease version $VERSION must use a GitHub prerelease" >&2
-              exit 1
-            fi
+      # 根据版本号决定 npm dist-tag
+      #
+      # 示例：
+      #
+      # 0.1.0           -> latest
+      # 0.2.0-alpha.1   -> alpha
+      # 0.2.0-beta.1    -> beta
+      # 0.2.0-rc.1      -> rc
+      #
+      # 未明确支持的 prerelease channel 会直接拒绝发布，
+      # 防止例如 1.0.0-next.1 被意外发布到 latest
+      - name: Determine npm dist-tag
+        id: dist-tag
+        shell: bash
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+
+          if [[ "$VERSION" == *"-"* ]]; then
             PRERELEASE="${VERSION#*-}"
-            NPM_TAG="${PRERELEASE%%.*}"
-            case "$NPM_TAG" in
-              alpha | beta | rc) ;;
+            CHANNEL="${PRERELEASE%%.*}"
+
+            case "$CHANNEL" in
+              alpha|beta|rc)
+                DIST_TAG="$CHANNEL"
+                ;;
               *)
-                echo "Unsupported npm prerelease tag: $NPM_TAG" >&2
+                echo "::error::Unsupported prerelease channel: $CHANNEL"
                 exit 1
                 ;;
             esac
           else
-            if [[ "$RELEASE_PRERELEASE" == "true" ]]; then
-              echo "Stable version $VERSION must not use a GitHub prerelease" >&2
-              exit 1
-            fi
-            NPM_TAG="latest"
+            DIST_TAG="latest"
           fi
 
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "npm_tag=$NPM_TAG" >> "$GITHUB_OUTPUT"
+          echo "tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
+          echo "Publishing $VERSION with npm dist-tag: $DIST_TAG"
 
-      - name: Check package
-        run: pnpm check
-
-      - name: Build package
-        run: pnpm build
-
-      - name: Preview package contents
-        run: pnpm pack:check
-
-      - name: Install OIDC-compatible npm
-        run: npm install --global "npm@>=11.5.1 <12"
-
+      # 发布到 npm
+      #
+      # 这里使用 npm Trusted Publishing / OIDC，
+      # 因此不需要：
+      #
+      #   NODE_AUTH_TOKEN
+      #   secrets.NPM_TOKEN
+      #
+      # package.json 中的 prepublishOnly 会在 npm publish 前自动执行。
+      #
+      # 例如你当前：
+      #
+      # "prepublishOnly":
+      #   "pnpm check && pnpm build && pnpm pack:check"
+      #
+      # 因此真正发布之前仍会进行：
+      #
+      # lint / format / typecheck / test
+      # build
+      # npm package 内容检查
       - name: Publish package
-        # 检查、构建和打包预览已经在前序步骤完成，避免再次触发 prepublishOnly。
-        run: npm publish --ignore-scripts --access public --tag "${{ steps.metadata.outputs.npm_tag }}"
-        # 首次创建 npm 包时使用此 secret；配置 Trusted Publisher 后删除这一行。
-        # env:
-        #   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --tag "${{ steps.dist-tag.outputs.tag }}"
