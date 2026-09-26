@@ -16,6 +16,7 @@ describe('createCliProgram', () => {
       'info',
       'list',
       'inspect',
+      'analyze',
       'verify',
       'unpack',
       'pack',
@@ -32,6 +33,9 @@ describe('createCliProgram', () => {
     expect(
       commands.get('compare')!.options.map((option) => option.flags),
     ).toEqual(['-v, --verbose'])
+    expect(
+      commands.get('analyze')!.options.map((option) => option.flags),
+    ).toEqual(['--json'])
     expect(commands.get('pack')!.helpInformation()).toContain(
       'deterministic fallback order',
     )

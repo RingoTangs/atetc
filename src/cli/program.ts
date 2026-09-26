@@ -1,5 +1,6 @@
 import { Command } from 'commander'
 import pkg from '../../package.json' with { type: 'json' }
+import { analyzeArchive } from './analyze-command'
 import { packDirectory } from './pack-command'
 import {
   compareArchives,
@@ -41,6 +42,13 @@ export function createCliProgram(): Command {
     .description('inspect binary layout and unknown fields')
     .argument('<pak>')
     .action(inspectArchive)
+
+  program
+    .command('analyze')
+    .description('analyze observed archive format characteristics')
+    .argument('<pak>')
+    .option('--json', 'output structured JSON')
+    .action(analyzeArchive)
 
   program
     .command('verify')
