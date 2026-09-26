@@ -71,7 +71,7 @@ atetc cmp etc.pak rebuilt.pak
 
 PAK 的 LZSS 解压格式一致，但不同资源包可能使用兼容的 `asktao-17` 或 `okumura-18` 编码 profile。使用 `--reference` 时，atetc 会尽可能检测并保留原 profile；未修改文件优先复用原压缩流，修改后的 stored/raw reference 文件仍保持 raw 存储。
 
-部分旧版 PAK 还包含 packed size 为零、original size 非零的文件型条目。这类不透明的 zero-payload 条目不会被解包成假的空文件，但使用 reference 重建时会保留其位置和元数据。
+部分旧版 PAK 还包含 packed size 为零、original size 非零的文件型条目。`unpack` 会跳过这类不透明的 zero-payload Entry，不会创建假的空文件，并会报告跳过数量；真实的 0-byte stored file 仍会正常创建。使用 `--reference` 重建时会保留 zero-payload Entry 的位置和元数据。
 
 ## 库 API
 
