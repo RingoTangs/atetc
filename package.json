@@ -1,7 +1,7 @@
 {
   "name": "@ringotangs/atetc",
   "type": "module",
-  "version": "0.1.1-alpha.1",
+  "version": "0.1.1-alpha.2",
   "packageManager": "pnpm@10.24.0",
   "description": "CLI and TypeScript library for inspecting, unpacking, and rebuilding etc.pak archives.",
   "author": "RingoTangs",
