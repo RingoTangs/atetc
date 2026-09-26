@@ -8,6 +8,9 @@ describe('createCliProgram', () => {
     const program = createCliProgram().action(action)
     expect(action).not.toHaveBeenCalled()
     expect(program.version()).toBe(pkg.version)
+    expect(program.description()).toBe(
+      'Inspect, analyze, verify, unpack, compare, and rebuild AskTao PAK archives',
+    )
 
     const commands = new Map(
       program.commands.map((command) => [command.name(), command]),
@@ -36,6 +39,9 @@ describe('createCliProgram', () => {
     expect(
       commands.get('analyze')!.options.map((option) => option.flags),
     ).toEqual(['--json'])
+    expect(commands.get('analyze')!.description()).toBe(
+      'analyze archive format characteristics',
+    )
     expect(commands.get('pack')!.helpInformation()).toContain(
       'deterministic fallback order',
     )

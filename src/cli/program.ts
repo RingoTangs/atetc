@@ -15,7 +15,9 @@ import { unpackArchive } from './unpack-command'
 export function createCliProgram(): Command {
   const program = new Command()
     .name('atetc')
-    .description('Inspect, unpack, verify, and rebuild etc.pak archives')
+    .description(
+      'Inspect, analyze, verify, unpack, compare, and rebuild AskTao PAK archives',
+    )
     .version(pkg.version)
     .showSuggestionAfterError()
     .addHelpText(
@@ -45,7 +47,7 @@ export function createCliProgram(): Command {
 
   program
     .command('analyze')
-    .description('analyze observed archive format characteristics')
+    .description('analyze archive format characteristics')
     .argument('<pak>')
     .option('--json', 'output structured JSON')
     .action(analyzeArchive)
