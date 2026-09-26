@@ -3,7 +3,7 @@
   "type": "module",
   "version": "0.1.1-alpha.2",
   "packageManager": "pnpm@10.24.0",
-  "description": "CLI and TypeScript library for inspecting, unpacking, and rebuilding etc.pak archives.",
+  "description": "CLI and TypeScript library for inspecting, analyzing, verifying, unpacking, comparing, and rebuilding AskTao PAK archives.",
   "author": "RingoTangs",
   "license": "MIT",
   "homepage": "https://github.com/RingoTangs/atetc#readme",
@@ -19,7 +19,9 @@
     "cli",
     "pak",
     "lzss",
-    "archive"
+    "archive",
+    "asktao",
+    "gameshell"
   ],
   "sideEffects": false,
   "exports": {
