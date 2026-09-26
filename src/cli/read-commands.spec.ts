@@ -4,7 +4,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildPak } from '../pak'
-import { compareArchives, inspectArchive, listArchive } from './read-commands'
+import {
+  compareArchives,
+  inspectArchive,
+  listArchive,
+  showInfo,
+} from './read-commands'
 
 const temporaryDirectories: string[] = []
 
@@ -76,13 +81,23 @@ describe('compare command', () => {
     expect(rendered).not.toContain('index 20\n')
   })
 
-  it('reports zero-payload modes and comparison counts', () => {
+  it('reports file modes, ratios, counts, and comparison details', () => {
     const root = temporaryDirectory()
     const archivePath = path.join(root, 'opaque.pak')
     fs.writeFileSync(
       archivePath,
       buildPak({
         entries: [
+          {
+            name: 'empty',
+            data: Buffer.alloc(0),
+            stored: true,
+          },
+          {
+            name: 'compressed',
+            data: Buffer.alloc(8, 0x41),
+            stored: false,
+          },
           {
             name: 'opaque',
             payloadKind: 'none',
@@ -98,13 +113,23 @@ describe('compare command', () => {
       output.push(values.join(' ')),
     )
     listArchive(archivePath, { long: true })
+    showInfo(archivePath)
     inspectArchive(archivePath)
     compareArchives(archivePath, archivePath)
 
     const rendered = output.join('\n')
-    expect(rendered).toContain('MODE')
-    expect(rendered).toContain('NONE')
-    expect(rendered).not.toContain('0.00%')
+    expect(output).toContain('INDEX  MODE     PACKED  ORIGINAL  RATIO    NAME')
+    expect(output).toContain('0      STORED   0       0         -        empty')
+    expect(output).toContain(
+      '1      LZSS     4       8         50.00%   compressed',
+    )
+    expect(output).toContain(
+      '2      NO-DATA  0       12345     -        opaque',
+    )
+    expect(rendered).not.toContain('NONE')
+    expect(rendered).toContain('File entries: 3')
+    expect(rendered).toContain('Extractable files: 2')
+    expect(rendered).toContain('Zero-payload entries: 1')
     expect(rendered).toContain('payload=none')
     expect(rendered).toContain('field00=0x00000000')
     expect(rendered).toContain('Zero-payload entries matched: 1/1')

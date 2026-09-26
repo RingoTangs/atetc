@@ -88,7 +88,8 @@ export function showInfo(filename: string): void {
   console.log(`Index size: ${archive.header.indexSize}`)
   console.log(`Root entries: ${archive.entries.length}`)
   console.log(`Directories: ${archive.directories.length}`)
-  console.log(`Files: ${archive.files.length}`)
+  console.log(`File entries: ${archive.files.length}`)
+  console.log(`Extractable files: ${extractableFiles.length}`)
   console.log(`Zero-payload entries: ${zeroPayloadEntries}`)
   console.log(`Entry size: ${ENTRY_SIZE}`)
   console.log(`Data start: ${archive.dataStart}`)
@@ -101,7 +102,18 @@ export function showInfo(filename: string): void {
 
 function entryMode(entry: PakEntry): string {
   if (entry.type === 'directory') return 'DIR'
+  if (entry.payloadKind === 'none') return 'NO-DATA'
   return entry.payloadKind!.toUpperCase()
+}
+
+function entryRatio(entry: PakEntry): string {
+  if (
+    entry.type === 'directory' ||
+    entry.payloadKind === 'none' ||
+    (entry.packedSize === 0 && entry.unpackedSize === 0)
+  )
+    return '-'
+  return ratio(entry.packedSize, entry.unpackedSize)
 }
 
 export function listArchive(filename: string, options: ListOptions): void {
@@ -112,10 +124,10 @@ export function listArchive(filename: string, options: ListOptions): void {
       console.log(entry.type === 'directory' ? `${entry.path}/` : entry.path)
     return
   }
-  console.log('INDEX  MODE    PACKED  ORIGINAL  RATIO    NAME')
+  console.log('INDEX  MODE     PACKED  ORIGINAL  RATIO    NAME')
   for (const entry of entries)
     console.log(
-      `${String(entry.index).padEnd(7)}${entryMode(entry).padEnd(8)}${String(entry.packedSize).padEnd(8)}${String(entry.unpackedSize).padEnd(10)}${(entry.type === 'directory' || entry.payloadKind === 'none' ? '-' : ratio(entry.packedSize, entry.unpackedSize)).padEnd(9)}${entry.type === 'directory' ? `${entry.path}/` : entry.path}`,
+      `${String(entry.index).padEnd(7)}${entryMode(entry).padEnd(9)}${String(entry.packedSize).padEnd(8)}${String(entry.unpackedSize).padEnd(10)}${entryRatio(entry).padEnd(9)}${entry.type === 'directory' ? `${entry.path}/` : entry.path}`,
     )
 }
 
