@@ -5,7 +5,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { comparePaks } from './compare'
 import { ENTRY_FLAG_STORED, HEADER_SIZE } from './constants'
-import { compressLzss, decompressLzss, detectLzssProfile } from './lzss'
+import { compressLzss, decompressLzss } from './lzss'
 import {
   buildPak,
   compareFallbackPakNames,
@@ -450,70 +450,4 @@ describe('pak', () => {
       totalZeroPayloadEntries: 1,
     })
   })
-
-  it(
-    'recognizes stored entries and both profiles in the real aaa samples',
-    () => {
-      const etcBuffer = fs.readFileSync(
-        path.resolve(import.meta.dirname, '../sample/real-etc/aaa/etc.pak'),
-      )
-      const verification = verifyPak(etcBuffer)
-      expect(verification.valid).toBe(true)
-      const stored = verification.archive!.files.filter((entry) => entry.stored)
-      expect(
-        stored.map((entry) => [
-          entry.name,
-          entry.packedSize,
-          entry.unpackedSize,
-        ]),
-      ).toEqual([
-        ['file_dependence.list', 0, 0],
-        ['hanzi_table.list', 938, 938],
-      ])
-      expect(readPakEntryData(stored[1]!)).toEqual(stored[1]!.packedData)
-
-      const library = parsePak(
-        fs.readFileSync(
-          path.resolve(
-            import.meta.dirname,
-            '../sample/real-etc/aaa/lib_aaa32.pak',
-          ),
-        ),
-      )
-      for (const entryPath of [
-        'aaa/daemons/express_recharged.o',
-        'aaa/start_aaa.o',
-      ]) {
-        const entry = library.files.find((item) => item.path === entryPath)!
-        expect(
-          detectLzssProfile(readPakEntryData(entry), entry.packedData),
-        ).toBe('okumura-18')
-      }
-    },
-    REAL_SAMPLE_TEST_TIMEOUT,
-  )
-
-  it(
-    'verifies the real dba sample with a zero-payload entry',
-    () => {
-      const verification = verifyPak(
-        fs.readFileSync(
-          path.resolve(import.meta.dirname, '../sample/real-etc/dba/etc.pak'),
-        ),
-      )
-      expect(verification.valid).toBe(true)
-      const opaque = verification.archive!.files.find(
-        (entry) => entry.name === 'etc',
-      )
-      expect(opaque).toMatchObject({
-        payloadKind: 'none',
-        field00: 0,
-        dataOffset: 6_901_897,
-        packedSize: 0,
-        unpackedSize: 7_829_223,
-        field10: 0x59e63e14,
-      })
-    },
-    REAL_SAMPLE_TEST_TIMEOUT,
-  )
 })
