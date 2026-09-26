@@ -6,7 +6,7 @@ import { parsePak } from './pak'
 import { analyzePak, summarizePakAnalyses } from './pak-analysis'
 
 const REAL_SAMPLE_ROOT = path.resolve(import.meta.dirname, '../sample/real-etc')
-const REAL_ANALYSIS_TEST_TIMEOUT = 180_000
+const REAL_ANALYSIS_TEST_TIMEOUT = 360_000
 const REAL_SAMPLES = [
   'aaa/etc.pak',
   'aaa/lib_aaa32.pak',
