@@ -142,7 +142,14 @@ export function unpackArchive(filename: string, options: UnpackOptions): void {
     fs.mkdirSync(directory, { recursive: true })
   for (const file of extraction.files)
     fs.writeFileSync(file.target, file.data, { flag: 'wx' })
+  const skippedZeroPayloadEntries = archive.files.filter(
+    (entry) => entry.payloadKind === 'none',
+  ).length
+  const skippedSummary =
+    skippedZeroPayloadEntries === 0
+      ? ''
+      : ` (${skippedZeroPayloadEntries} zero-payload ${skippedZeroPayloadEntries === 1 ? 'entry' : 'entries'} skipped)`
   console.log(
-    `${success('Extracted')} ${extraction.files.length} files to ${path.resolve(destination)}`,
+    `${success('Extracted')} ${extraction.files.length} files to ${path.resolve(destination)}${skippedSummary}`,
   )
 }
