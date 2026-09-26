@@ -73,6 +73,8 @@ PAK 的 LZSS 解压格式一致，但不同资源包可能使用兼容的 `askta
 
 部分旧版 PAK 还包含 packed size 为零、original size 非零的文件型条目。`unpack` 会跳过这类不透明的 zero-payload Entry，不会创建假的空文件，并会报告跳过数量；真实的 0-byte stored file 仍会正常创建。使用 `--reference` 重建时会保留 zero-payload Entry 的位置和元数据。
 
+关于真实生产样本的可重复证据，以及 Confirmed、Strongly Supported、Unknown 格式特征的区分，请参阅 [PAK 格式研究](docs/pak-format-analysis.md)。
+
 ## 库 API
 
 ```ts

@@ -73,6 +73,8 @@ PAK files share the same LZSS decoding format, but different archives may use th
 
 Some legacy PAK files also contain file-type entries with a packed size of zero and a nonzero original size. `unpack` skips these opaque zero-payload entries instead of creating fake empty files and reports how many were skipped; genuine zero-byte stored files are still created normally. Their position and metadata are preserved when rebuilding with `--reference`.
 
+See [PAK format research](docs/pak-format-analysis.md) for reproducible evidence from the production samples and a clear separation between confirmed, strongly supported, and unknown format characteristics.
+
 ## Library
 
 ```ts
