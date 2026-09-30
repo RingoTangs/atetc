@@ -13,7 +13,7 @@ import {
   verifyPak,
 } from './pak'
 
-const REAL_SAMPLE_ROOT = path.resolve(import.meta.dirname, '../sample/real-etc')
+const REAL_SAMPLE_ROOT = path.resolve(import.meta.dirname, '../sample')
 const REAL_SAMPLE_TEST_TIMEOUT = 30_000
 
 interface SampleContext {

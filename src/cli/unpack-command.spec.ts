@@ -8,10 +8,7 @@ import { buildPak, parsePak } from '../pak'
 import { packDirectory } from './pack-command'
 import { unpackArchive } from './unpack-command'
 
-const REAL_SAMPLE_ROOT = path.resolve(
-  import.meta.dirname,
-  '../../sample/real-etc',
-)
+const REAL_SAMPLE_ROOT = path.resolve(import.meta.dirname, '../../sample')
 const REAL_CLI_TEST_TIMEOUT = 60_000
 const temporaryDirectories: string[] = []
 let output: string[]

@@ -1,13 +1,13 @@
 # PAK format analysis
 
 This document records evidence from the 12 production archives under
-`sample/real-etc`. It distinguishes observed invariants from hypotheses. The
+`sample`. It distinguishes observed invariants from hypotheses. The
 results are reproducible with `atetc analyze <pak>` and the tests in
 `src/pak-analysis.spec.ts`.
 
 ```bash
-atetc analyze sample/real-etc/gs/etc.pak
-atetc analyze sample/real-etc/dba/etc.pak --json
+atetc analyze sample/gs/etc.pak
+atetc analyze sample/dba/etc.pak --json
 ```
 
 `field10` values are classified as timestamp-like only when they fall between
