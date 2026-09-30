@@ -32,11 +32,11 @@
 
 ## 安装
 
-当前版本为预发布版本，通过 `alpha` dist-tag 发布：
+可通过 npm 安装当前正式版本：
 
 ```bash
-npm install --global @ringotangs/atetc@alpha
-npx @ringotangs/atetc@alpha --version
+npm install --global @ringotangs/atetc
+npx @ringotangs/atetc --version
 ```
 
 全局安装后的可执行命令仍然是 `atetc`。

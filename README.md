@@ -32,11 +32,11 @@ These results establish compatibility with the checked-in fixtures, not a guaran
 
 ## Installation
 
-The current release is a prerelease published under the `alpha` dist-tag:
+Install the current stable release from npm:
 
 ```bash
-npm install --global @ringotangs/atetc@alpha
-npx @ringotangs/atetc@alpha --version
+npm install --global @ringotangs/atetc
+npx @ringotangs/atetc --version
 ```
 
 The globally installed executable remains `atetc`.
